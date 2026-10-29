@@ -192,15 +192,17 @@ public final class DeviceTests extends Instrumentation {
         }
         var createdAt = java.time.LocalDateTime.of(2026, 10, 29, 15, 55, 19, 385_000_000);
         String dated = ThemeEngine.datedFilename("Моя тема", createdAt);
-        check(dated.equals("Моя тема_2026-10-29_15-55-19-385.hnt"),
-                "Automatic filename includes theme title and local date/time through milliseconds");
-        check(!dated.equals(ThemeEngine.datedFilename("Моя тема", createdAt.plusNanos(1_000_000))),
+        check(dated.equals("Моя тема_2026-10-29_15-55-19.hnt"),
+                "Automatic filename includes theme title and local date/time without milliseconds");
+        check(!dated.equals(ThemeEngine.datedFilename("Моя тема", createdAt.plusSeconds(1))),
                 "Timestamp distinguishes consecutive exports without changing theme title");
+        check(ThemeEngine.datedFilename("Моя тема", createdAt, 2).equals("Моя тема_2026-10-29_15-55-19_2.hnt"),
+                "Same-second filename collision receives numeric suffix");
         for (String name : List.of(" .a/b:c*?\"<>|\n", "Т".repeat(100), "\uD83D\uDE00".repeat(50))) {
             String generated = ThemeEngine.datedFilename(name, createdAt);
             check(generated.length() <= 100 && generated.getBytes(StandardCharsets.UTF_8).length <= 255
                             && ThemeEngine.filename(generated).equals(generated)
-                            && generated.endsWith("_2026-10-29_15-55-19-385.hnt"),
+                            && generated.endsWith("_2026-10-29_15-55-19.hnt"),
                     "Automatic filename sanitizes forbidden characters and preserves timestamp within filesystem limits");
             check(generated.equals(new String(generated.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8)),
                     "Truncating filename never splits a supplementary Unicode character");
@@ -776,7 +778,7 @@ public final class DeviceTests extends Instrumentation {
                 });
                 String filename = actualName[0];
                 filenames.add(filename);
-                check(filename.matches(themeTitle + "_\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2}-\\d{3}\\.hnt"),
+                check(filename.matches(themeTitle + "_\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2}(_\\d+)?\\.hnt"),
                         "Real export automatically generates dated filename from unchanged theme title");
                 check(ThemeEngine.findDocument(activity.getContentResolver(), tree, filename) != null,
                         "Template integration writes verified .hnt through real export button");
@@ -814,6 +816,8 @@ public final class DeviceTests extends Instrumentation {
                     activity.getString(R.string.templates)).performClick());
             waitForWork(activity);
             runOnMainSync(() -> {
+                check(findText(activity.getWindow().getDecorView(), activity.getString(R.string.resume_draft)) == null,
+                        "Unchanged draft saved by export does not offer to resume draft");
                 android.widget.ListView list = findList(activity.getWindow().getDecorView());
                 check(list.getAdapter().getCount() == 2, "Start list shows both saved templates");
                 android.widget.LinearLayout item = (android.widget.LinearLayout) list.getAdapter().getView(0, null, list);
@@ -862,6 +866,8 @@ public final class DeviceTests extends Instrumentation {
                     activity.getString(R.string.templates)).performClick());
             waitForWork(activity);
             runOnMainSync(() -> {
+                check(findText(activity.getWindow().getDecorView(), activity.getString(R.string.resume_draft)) != null,
+                        "Changed draft not saved into template offers to resume draft");
                 android.widget.ListView list = findList(activity.getWindow().getDecorView());
                 android.widget.LinearLayout recycled = (android.widget.LinearLayout) list.getAdapter().getView(0, null, list);
                 recycled = (android.widget.LinearLayout) list.getAdapter().getView(1, recycled, list);
@@ -1041,8 +1047,8 @@ public final class DeviceTests extends Instrumentation {
                 settings.overrides.putAll(overrides);
                 settings.overrides.put("dev.test.excluded/dev.test.excluded.Main", "");
                 TemplateStore.Entry first = store.save(settings, pack.label, false);
-                check(first.name().startsWith(pack.label + " · ") && first.name().matches(".*\\d{2}:\\d{2}:\\d{2}\\.\\d{3}.*"),
-                        "Template name contains pack title and precise timestamp");
+                check(first.name().startsWith(pack.label + " · ") &&                 first.name().matches(".*\\d{2}:\\d{2}:\\d{2} [+-]\\d{2}:\\d{2}"),
+                                        "Template name contains pack title and timestamp without milliseconds");
                 check(store.list().size() == 1, "First successful save creates one template");
                 check(!first.settings().has("icons") && first.settings().getJSONObject("overrides").getString(app.key()).equals(reference),
                         "Template stores references rather than icon images");
@@ -1326,8 +1332,11 @@ public final class DeviceTests extends Instrumentation {
                         "Wallpaper image selection stores private copy and updates draft");
                 check(((android.widget.ImageView) field(activity, "wallpaperPreview")).getDrawable() != null,
                         "Selected wallpaper is shown in editor");
-                findText(activity.getWindow().getDecorView(), activity.getString(R.string.remove_wallpaper)).performClick();
-                check(draft.wallpaperPath.isEmpty(), "Not including wallpaper explicitly clears draft setting");
+                android.view.View remove = findText(activity.getWindow().getDecorView(), activity.getString(R.string.remove_wallpaper));
+                check(remove.getVisibility() == android.view.View.VISIBLE, "Remove wallpaper action appears once wallpaper is added");
+                remove.performClick();
+                check(draft.wallpaperPath.isEmpty(), "Removing wallpaper explicitly clears draft setting");
+                check(remove.getVisibility() == android.view.View.GONE, "Remove wallpaper action hidden without wallpaper");
             });
             Files.writeString(source.toPath(), "invalid image");
             runOnMainSync(() -> activity.onActivityResult(13, android.app.Activity.RESULT_OK,

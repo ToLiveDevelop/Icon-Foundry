@@ -22,7 +22,7 @@ final class TemplateStore {
     record Entry(String id, String packLabel, Instant savedAt, JSONObject settings, String cover, String wallpaper,
                  JSONObject fileIcons) {
         String name() {
-            return packLabel + " · " + DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS xxx")
+            return packLabel + " · " + DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss xxx")
                     .withZone(ZoneId.systemDefault()).format(savedAt);
         }
     }

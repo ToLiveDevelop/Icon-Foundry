@@ -58,6 +58,38 @@ final class Draft {
         context.getSharedPreferences("draft", 0).edit().putString("json", toJson().toString()).apply();
     }
 
+    void markSaved(Context context) throws Exception {
+        context.getSharedPreferences("draft", 0).edit().putString("savedFingerprint", fingerprint(context)).apply();
+    }
+
+    boolean hasUnsavedChanges(Context context) {
+        if (pack.isEmpty() && title.isEmpty() && overrides.isEmpty() && coverPath.isEmpty() && wallpaperPath.isEmpty()) {
+            return false;
+        }
+        if (templateId.isEmpty()) return true;
+        try {
+            return !fingerprint(context).equals(context.getSharedPreferences("draft", 0).getString("savedFingerprint", ""));
+        } catch (Exception error) {
+            return true;
+        }
+    }
+
+    private String fingerprint(Context context) throws Exception {
+        java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+        JSONObject canonical = toJson().put("overrides", new JSONObject(new java.util.TreeMap<>(overrides)));
+        digest.update(canonical.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        for (String path : new String[]{coverPath, wallpaperPath}) {
+            digest.update((byte) 0);
+            if (!path.isEmpty()) {
+                java.io.File file = new java.io.File(context.getFilesDir(), path);
+                if (file.isFile()) digest.update(java.nio.file.Files.readAllBytes(file.toPath()));
+            }
+        }
+        StringBuilder hex = new StringBuilder();
+        for (byte value : digest.digest()) hex.append(String.format(java.util.Locale.ROOT, "%02x", value));
+        return hex.toString();
+    }
+
     JSONObject toJson() throws JSONException {
         JSONObject j = new JSONObject();
         j.put("title", title).put("pack", pack).put("tree", tree)

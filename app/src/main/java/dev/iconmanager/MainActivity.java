@@ -74,6 +74,7 @@ public final class MainActivity extends Activity {
     private Button exportButton;
     private TextView packInfo, appInfo, destinationInfo, status, templateHelp;
     private ImageView coverPreview, packPreview, wallpaperPreview;
+    private Button removeWallpaper;
     private Dialog packDialog;
     private Dialog cropDialog;
     private Dialog iconDialog;
@@ -153,7 +154,7 @@ public final class MainActivity extends Activity {
         create.setTextColor(BG);
         create.setBackground(buttonSurface(ACCENT, 28));
         root.addView(create);
-        if (!draft.pack.isEmpty() || !draft.title.isEmpty() || !draft.overrides.isEmpty()) {
+        if (draft.hasUnsavedChanges(this)) {
             root.addView(button(R.string.resume_draft, view -> openEditor()));
         }
         ListView list = new ListView(this);
@@ -231,6 +232,7 @@ public final class MainActivity extends Activity {
                     work(getString(R.string.loading_template), () -> templates.open(entries.get(index).id()), loaded -> {
                         draft = loaded;
                         saveDraft();
+                        markDraftSaved();
                         openEditor();
                     }));
         });
@@ -318,9 +320,10 @@ public final class MainActivity extends Activity {
         wallpaperRow.addView(wallpaperPreview, new LinearLayout.LayoutParams(dp(72), dp(128)));
         LinearLayout wallpaperButtons = column();
         wallpaperButtons.addView(button(R.string.choose_wallpaper, view -> openFile(WALLPAPER, "image/*")));
-        wallpaperButtons.addView(button(R.string.remove_wallpaper, view -> {
+        removeWallpaper = button(R.string.remove_wallpaper, view -> {
             draft.wallpaperPath = ""; saveDraft(); refresh();
-        }));
+        });
+        wallpaperButtons.addView(removeWallpaper);
         LinearLayout.LayoutParams wallpaperParams = new LinearLayout.LayoutParams(0, -2, 1);
         wallpaperParams.leftMargin = dp(16);
         wallpaperRow.addView(wallpaperButtons, wallpaperParams);
@@ -455,6 +458,7 @@ public final class MainActivity extends Activity {
         }
         wallpaperPreview.setImageBitmap(draft.wallpaperPath.isEmpty() ? null
                 : BitmapFactory.decodeFile(new File(getFilesDir(), draft.wallpaperPath).getPath()));
+        removeWallpaper.setVisibility(draft.wallpaperPath.isEmpty() ? View.GONE : View.VISIBLE);
     }
 
     private void updateExportEnabled() {
@@ -935,10 +939,10 @@ public final class MainActivity extends Activity {
         String themeTitle = title.getText().toString().trim();
         if (themeTitle.length() > 100) { title.setError("Не более 100 символов"); return; }
         Uri tree = Uri.parse(draft.tree);
-        exportTo(themeTitle, ThemeEngine.datedFilename(themeTitle, java.time.LocalDateTime.now()), tree);
+        exportTo(themeTitle, java.time.LocalDateTime.now(), tree);
     }
 
-    private void exportTo(String themeTitle, String outputName, Uri tree) {
+    private void exportTo(String themeTitle, java.time.LocalDateTime createdAt, Uri tree) {
         saveDraft();
         Draft snapshot;
         try { snapshot = Draft.fromJson(draft.toJson()); }
@@ -951,6 +955,7 @@ public final class MainActivity extends Activity {
         IconRepository.Pack currentPack = pack;
         String coverPath = draft.coverPath;
         work(getString(R.string.saving_theme), () -> {
+            String outputName = ThemeEngine.availableDatedFilename(getContentResolver(), tree, themeTitle, createdAt);
             apps = repository.apps();
             Bitmap cover;
             if (coverPath.isEmpty()) cover = ThemeEngine.cover(currentPack, apps, overrides);
@@ -980,6 +985,7 @@ public final class MainActivity extends Activity {
         }, saved -> {
             draft.templateId = saved.template().id();
             saveDraft();
+            markDraftSaved();
             saveAsNew.setChecked(false);
             saveAsNew.setVisibility(View.VISIBLE);
             templateHelp.setText(R.string.template_update_help);
@@ -1080,6 +1086,10 @@ public final class MainActivity extends Activity {
     private void saveDraft() {
         try { draft.save(this); }
         catch (org.json.JSONException error) { Log.e("IconManager", "Draft save failed", error); showError(error); }
+    }
+    private void markDraftSaved() {
+        try { draft.markSaved(this); }
+        catch (Exception error) { Log.w("IconManager", "Draft saved-state update failed", error); }
     }
     private void showError(Exception error) {
         String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();

@@ -162,10 +162,16 @@ final class ThemeEngine {
     }
 
     static String datedFilename(String title, LocalDateTime createdAt) {
+        return datedFilename(title, createdAt, 1);
+    }
+
+    static String datedFilename(String title, LocalDateTime createdAt, int copy) {
+        if (copy < 1) throw new IllegalArgumentException("copy");
         String base = title.strip().replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_").replaceAll("\\s+", " ");
         if (base.isBlank()) throw new IllegalArgumentException("Укажите название темы.");
         base = base.replaceAll("^\\.+|[. ]+$", "_");
-        String suffix = "_" + createdAt.format(DateTimeFormatter.ofPattern("uuuu-MM-dd_HH-mm-ss-SSS", Locale.ROOT)) + ".hnt";
+        String suffix = "_" + createdAt.format(DateTimeFormatter.ofPattern("uuuu-MM-dd_HH-mm-ss", Locale.ROOT))
+                + (copy > 1 ? "_" + copy : "") + ".hnt";
         int limit = 100 - suffix.length();
         if (base.length() > limit) {
             int end = Character.isHighSurrogate(base.charAt(limit - 1)) ? limit - 1 : limit;
@@ -191,6 +197,15 @@ final class ThemeEngine {
                 throw new IOException(context.getString(R.string.access_lost));
             }
         }
+    }
+
+    static String availableDatedFilename(ContentResolver resolver, Uri tree, String title, LocalDateTime createdAt)
+            throws IOException {
+        for (int copy = 1; copy <= 99; copy++) {
+            String name = datedFilename(title, createdAt, copy);
+            if (!exists(resolver, tree, name)) return name;
+        }
+        throw new IOException("Не удалось подобрать свободное имя файла темы.");
     }
 
     static boolean exists(ContentResolver resolver, Uri tree, String filename) throws IOException {
