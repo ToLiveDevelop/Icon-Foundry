@@ -67,6 +67,11 @@
     <string name="template_pack_missing">Иконпак не установлен</string>
     <string name="cancel">Отмена</string>
     <string name="pick_icon">Иконка для %1$s</string>
+    <string name="choose_icon_file">Выбрать иконку из файла</string>
+    <string name="icon_from_file">Назначено из файла</string>
+    <string name="file_icon_preview">Предпросмотр иконки</string>
+    <string name="file_icon_help">Пропорции и прозрачность сохраняются. Изображение вписывается в квадрат без обрезки. После создания темы копия иконки сохраняется внутри шаблона; исходный файл больше не нужен.</string>
+    <string name="use_icon_file">Использовать иконку</string>
     <string name="search_icons">Поиск по имени иконки или категории</string>
     <string name="automatic">Из иконпака шаблона</string>
     <string name="shape_example">Форма: %1$s. Пример: %2$s</string>
@@ -82,8 +87,8 @@
     <string name="export_progress">Создание темы: %1$d / %2$d</string>
     <string name="export_finishing">Проверка и сохранение темы…</string>
     <string name="export_success">Тема сохранена</string>
-    <string name="export_done">%1$s\n\nВыберите её в приложении «Темы».</string>
-    <string name="export_done_full_theme">%1$s\n\nВ «Темах» примените тему целиком, не только иконки — иначе серый фон стека останется. Если обои не выбраны, HONOR может заменить текущие запасными. Выбранные обои включаются для рабочего стола и блокировки.</string>
+    <string name="export_done">%1$s\n\nВыберите её в приложении «Темы». Если после замены файла показывается старая тема, удалите её запись в «Темах», затем заново создайте тему здесь. Очистка кэша не гарантирует обновление.</string>
+    <string name="export_done_full_theme">%1$s\n\nВ «Темах» примените тему целиком, не только иконки — иначе серый фон стека останется. Если обои не выбраны, HONOR может заменить текущие запасными. Выбранные обои включаются для рабочего стола и блокировки.\n\nЕсли после замены файла показывается старая тема, удалите её запись в «Темах», затем заново создайте тему здесь.</string>
     <string name="open_themes">Открыть «Темы»</string>
     <string name="filename_error">Введите имя файла без /, \\, управляющих символов и символов : * ? " &lt; &gt; |. Расширение .hnt добавится автоматически.</string>
     <string name="required">Укажите название, иконпак и каталог Honor/Themes.</string>
@@ -91,7 +96,7 @@
     <string name="destination_error">Выберите именно каталог Honor/Themes во внутренней памяти, а не корень хранилища или другой каталог.</string>
     <string name="file_exists">Файл с таким именем появился или изменился после проверки. Повторите сохранение и подтвердите замену.</string>
     <string name="replace_title">Заменить тему?</string>
-    <string name="replace_message">Файл «%1$s» уже существует в Honor/Themes. Заменить его новой темой?</string>
+    <string name="replace_message">Файл «%1$s» уже существует в Honor/Themes. Заменить его новой темой?\n\n«Темы» могут продолжать показывать старую запись. В этом случае удалите её в «Темах» и создайте тему здесь заново: удаление записи может удалить и сам .hnt.</string>
     <string name="replace">Заменить</string>
     <string name="access_lost">Нет доступа к каталогу. Выберите Honor/Themes заново.</string>
     <string name="template_error">Неподдерживаемый образец: нужен ZIP .hnt с description.xml (HnTheme или HwTheme) и вложенным ZIP icons с обычными PNG либо слоями background.png / foreground.png.</string>

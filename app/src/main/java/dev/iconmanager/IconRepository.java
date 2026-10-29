@@ -44,6 +44,7 @@ final class IconRepository {
         final Map<String, Icon> icons = new LinkedHashMap<>();
         final Set<String> unavailable = new LinkedHashSet<>();
         private Integer fallbackSize;
+        java.io.File fileIcons;
 
         Pack(String packageName, String label, Resources resources, Bitmap badge, PackageManager manager) {
             this.packageName = packageName;
@@ -114,6 +115,7 @@ final class IconRepository {
         }
 
         Bitmap render(String name, int size) throws IOException {
+            if (FileIcons.isFile(name)) return FileIcons.render(fileIcons, name, size);
             String source = sourcePackage(name, packageName);
             String resource = resourceName(name);
             Resources sourceResources = resources;
@@ -153,9 +155,11 @@ final class IconRepository {
     }
 
     private final PackageManager pm;
+    private final java.io.File fileIcons;
 
     IconRepository(Context context) {
         pm = context.getPackageManager();
+        fileIcons = FileIcons.directory(context);
     }
 
     List<App> apps() {
@@ -211,6 +215,7 @@ final class IconRepository {
         Resources resources = pm.getResourcesForApplication(packageName);
         Pack pack = new Pack(packageName,
                 pm.getApplicationLabel(pm.getApplicationInfo(packageName, 0)).toString(), resources, badge(packageName), pm);
+        pack.fileIcons = fileIcons;
         parse(resources, packageName, "appfilter", parser -> {
             String tag = parser.getName();
             if (!tag.equals("item") && !tag.equals("calendar")) return;

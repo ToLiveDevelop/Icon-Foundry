@@ -56,7 +56,7 @@ import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
 public final class MainActivity extends Activity {
-    private static final int COVER = 11, DIRECTORY = 12, WALLPAPER = 13;
+    private static final int COVER = 11, DIRECTORY = 12, WALLPAPER = 13, ICON_FILE = 14;
     private static final int BG = Color.BLACK, PANEL = Color.rgb(24, 24, 24);
     private static final int ACCENT = Color.rgb(255, 193, 7), MUTED = Color.rgb(189, 189, 189);
     private static final int CONTROL = Color.rgb(36, 36, 36);
@@ -81,6 +81,9 @@ public final class MainActivity extends Activity {
     private AlertDialog exportDialog, errorDialog, deleteDialog;
     private Dialog progressDialog;
     private TextView progressMessage;
+    private String pendingIconApp;
+    private Runnable pendingIconChanged;
+    private Dialog fileIconDialog;
     private RadioGroup exportScope;
     private ImageView shapePreview;
     private boolean busy;
@@ -92,6 +95,7 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (savedInstanceState != null) pendingIconApp = savedInstanceState.getString("pendingIconApp");
         repository = new IconRepository(this);
         templates = new TemplateStore(this);
         Exception draftError = null;
@@ -527,7 +531,12 @@ public final class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
-        if (requestCode == COVER) {
+        if (requestCode == ICON_FILE) {
+            if (pendingIconApp == null) { showError(new IOException("Выберите приложение для иконки заново.")); return; }
+            String appKey = pendingIconApp;
+            Runnable changed = pendingIconChanged;
+            work(() -> FileIcons.read(this, uri), image -> previewFileIcon(appKey, changed, image));
+        } else if (requestCode == COVER) {
             work(() -> ThemeEngine.readCover(getContentResolver(), uri), this::cropCover);
         } else if (requestCode == WALLPAPER) {
             work(() -> {
@@ -750,7 +759,7 @@ public final class MainActivity extends Activity {
                 LinearLayout labels = (LinearLayout) item.getChildAt(1);
                 ((TextView) labels.getChildAt(0)).setText(app.label());
                 ((TextView) labels.getChildAt(1)).setText(app.key());
-                String detail = selected == null
+                String detail = selected != null && FileIcons.isFile(selected) ? getString(R.string.icon_from_file) : selected == null
                         ? getString(draft.overrides.containsKey(app.key()) ? R.string.original : R.string.missing)
                         : getString(draft.overrides.containsKey(app.key()) ? R.string.manual : R.string.matched, selected);
                 ((TextView) labels.getChildAt(2)).setText(detail);
@@ -785,6 +794,11 @@ public final class MainActivity extends Activity {
         Button sourceButton = button(R.string.choose_pack, view -> {});
         sourceButton.setText(getString(R.string.icon_source, source[0].label));
         layout.addView(sourceButton);
+        layout.addView(button(R.string.choose_icon_file, view -> {
+            pendingIconApp = app.key();
+            pendingIconChanged = changed;
+            openFile(ICON_FILE, "image/*");
+        }));
         LinearLayout actions = row();
         Button automatic = button(R.string.automatic, view -> {
             draft.overrides.remove(app.key()); changed.run(); dialog.dismiss();
@@ -853,6 +867,49 @@ public final class MainActivity extends Activity {
         });
         filter.accept("");
         showFull(dialog);
+    }
+
+    private void previewFileIcon(String appKey, Runnable changed, Bitmap image) {
+        Dialog dialog = new Dialog(this, android.R.style.Theme_Material_Dialog_NoActionBar);
+        fileIconDialog = dialog;
+        LinearLayout content = column();
+        content.setPadding(dp(24), dp(24), dp(24), dp(24));
+        content.setBackground(rounded(PANEL, 24));
+        content.addView(text(getString(R.string.file_icon_preview), 22, Color.WHITE));
+        content.addView(text(getString(R.string.file_icon_help), 14, MUTED));
+        ImageView preview = new ImageView(this);
+        preview.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        preview.setPadding(dp(16), dp(16), dp(16), dp(16));
+        preview.setBackground(rounded(CONTROL, 16));
+        preview.setImageBitmap(image);
+        preview.setContentDescription(getString(R.string.file_icon_preview));
+        content.addView(preview, new LinearLayout.LayoutParams(-1, dp(192)));
+        content.addView(button(R.string.use_icon_file, view -> {
+            Bitmap saving = image.copy(Bitmap.Config.ARGB_8888, false);
+            work(() -> {
+                try { return FileIcons.save(this, saving); }
+                finally { saving.recycle(); }
+            }, reference -> {
+                draft.overrides.put(appKey, reference);
+                saveDraft();
+                if (changed != null) changed.run();
+                else if (editing) refresh();
+                if (iconDialog != null) iconDialog.dismiss();
+                dialog.dismiss();
+                pendingIconApp = null;
+                pendingIconChanged = null;
+            });
+        }));
+        content.addView(button(R.string.cancel, view -> dialog.dismiss()));
+        dialog.setContentView(content);
+        dialog.setOnDismissListener(ignored -> {
+            preview.setImageDrawable(null);
+            image.recycle();
+            if (fileIconDialog == dialog) fileIconDialog = null;
+        });
+        dialog.show();
+        dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+        dialog.getWindow().setLayout(Math.min(dp(360), getResources().getDisplayMetrics().widthPixels - dp(32)), -2);
     }
 
     private void bindImage(ImageView view, String name) {
@@ -1149,6 +1206,11 @@ public final class MainActivity extends Activity {
         });
     }
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
+
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        state.putString("pendingIconApp", pendingIconApp);
+    }
     @Override protected void onStop() { saveDraft(); super.onStop(); }
     @Override protected void onDestroy() {
         if (packDialog != null) packDialog.dismiss();
@@ -1158,6 +1220,7 @@ public final class MainActivity extends Activity {
         if (errorDialog != null) errorDialog.dismiss();
         if (deleteDialog != null) deleteDialog.dismiss();
         if (progressDialog != null) progressDialog.dismiss();
+        if (fileIconDialog != null) fileIconDialog.dismiss();
         worker.shutdown(); thumbnails.shutdown(); super.onDestroy();
     }
 }

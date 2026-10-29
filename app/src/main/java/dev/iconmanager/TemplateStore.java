@@ -19,7 +19,8 @@ import java.util.List;
 import java.util.UUID;
 
 final class TemplateStore {
-    record Entry(String id, String packLabel, Instant savedAt, JSONObject settings, String cover, String wallpaper) {
+    record Entry(String id, String packLabel, Instant savedAt, JSONObject settings, String cover, String wallpaper,
+                 JSONObject fileIcons) {
         String name() {
             return packLabel + " · " + DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS xxx")
                     .withZone(ZoneId.systemDefault()).format(savedAt);
@@ -44,7 +45,8 @@ final class TemplateStore {
             JSONObject item = values.getJSONObject(i);
             entries.add(new Entry(item.getString("id"), item.getString("packLabel"),
                     Instant.parse(item.getString("savedAt")), item.getJSONObject("settings"), item.getString("cover"),
-                    item.optString("wallpaper")));
+                    item.optString("wallpaper"), item.optJSONObject("fileIcons") == null ? new JSONObject()
+                            : item.getJSONObject("fileIcons")));
         }
         entries.sort(Comparator.comparing(Entry::savedAt).reversed());
         return entries;
@@ -68,7 +70,13 @@ final class TemplateStore {
             wallpaper = Base64.encodeToString(Files.readAllBytes(new File(context.getFilesDir(), draft.wallpaperPath).toPath()),
                     Base64.NO_WRAP);
         }
-        Entry saved = new Entry(id, packLabel, Instant.now(), settings, cover, wallpaper);
+        JSONObject fileIcons = new JSONObject();
+        for (String reference : draft.overrides.values()) {
+            if (FileIcons.isFile(reference) && !fileIcons.has(reference)) {
+                fileIcons.put(reference, Base64.encodeToString(FileIcons.bytes(context, reference), Base64.NO_WRAP));
+            }
+        }
+        Entry saved = new Entry(id, packLabel, Instant.now(), settings, cover, wallpaper, fileIcons);
         entries.removeIf(entry -> entry.id().equals(id));
         entries.add(saved);
         write(entries);
@@ -86,7 +94,7 @@ final class TemplateStore {
         for (Entry entry : entries) {
             values.put(new JSONObject().put("id", entry.id()).put("packLabel", entry.packLabel())
                     .put("savedAt", entry.savedAt().toString()).put("settings", entry.settings()).put("cover", entry.cover())
-                    .put("wallpaper", entry.wallpaper()));
+                    .put("wallpaper", entry.wallpaper()).put("fileIcons", entry.fileIcons()));
         }
         byte[] bytes = new JSONObject().put("version", 1).put("templates", values).toString().getBytes(StandardCharsets.UTF_8);
         FileOutputStream output = file.startWrite();
@@ -104,6 +112,12 @@ final class TemplateStore {
                 .orElseThrow(() -> new IOException("Шаблон не найден."));
         Draft draft = Draft.fromJson(entry.settings());
         draft.templateId = entry.id();
+        for (String reference : draft.overrides.values()) {
+            if (FileIcons.isFile(reference)) {
+                if (!entry.fileIcons().has(reference)) throw new IOException("В шаблоне отсутствует иконка из файла.");
+                FileIcons.restore(context, reference, Base64.decode(entry.fileIcons().getString(reference), Base64.DEFAULT));
+            }
+        }
         if (!entry.cover().isEmpty()) {
             byte[] image = Base64.decode(entry.cover(), Base64.DEFAULT);
             AtomicFile cover = new AtomicFile(new File(context.getFilesDir(), "template-cover.jpg"));

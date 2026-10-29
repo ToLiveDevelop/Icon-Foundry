@@ -77,6 +77,7 @@ public final class DeviceTests extends Instrumentation {
                     && info.badge().getHeight() == 96, "Discovered pack has an application icon for picker");
         }
         IconRepository.Pack pack = repository.load(packName);
+        verifyFileIcons(context, pack);
         verifyMaskGeometry(context, repository, pack, packs);
         verifyWallpaper(context, pack);
         Bundle discovered = new Bundle();
@@ -339,6 +340,91 @@ public final class DeviceTests extends Instrumentation {
         check(context.getCacheDir().listFiles((dir, name) -> name.startsWith("sample-")).length == 0, "Reference temporary files cleaned up");
     }
 
+    private void verifyFileIcons(Context context, IconRepository.Pack pack) throws Exception {
+        File directory = new File(context.getCacheDir(), "file-icon-check");
+        Files.createDirectories(directory.toPath());
+        Context isolated = new android.content.ContextWrapper(context) {
+            @Override public File getFilesDir() { return directory; }
+        };
+        Bitmap wide = Bitmap.createBitmap(320, 160, Bitmap.Config.ARGB_8888);
+        wide.eraseColor(android.graphics.Color.RED);
+        File original = new File(directory, "input.png");
+        try (FileOutputStream output = new FileOutputStream(original)) { wide.compress(Bitmap.CompressFormat.PNG, 100, output); }
+        finally { wide.recycle(); }
+        java.io.File previousDirectory = pack.fileIcons;
+        Bitmap cover = Bitmap.createBitmap(720, 1280, Bitmap.Config.ARGB_8888);
+        try {
+            Bitmap imported = FileIcons.read(isolated, Uri.fromFile(original));
+            String reference;
+            try {
+                check(imported.getWidth() == 192 && imported.getHeight() == 192,
+                        "Imported file normalized to native export canvas");
+                check(android.graphics.Color.alpha(imported.getPixel(96, 0)) == 0
+                        && imported.getPixel(96, 96) == android.graphics.Color.RED,
+                        "Rectangular file retains proportions, transparent padding and colors without cropping");
+                reference = FileIcons.save(isolated, imported);
+                check(reference.equals(FileIcons.save(isolated, imported)), "Identical file icons deduplicate by content");
+            } finally { imported.recycle(); }
+            Files.delete(original.toPath());
+            pack.fileIcons = FileIcons.directory(isolated);
+            Bitmap rendered = pack.render(reference, 192);
+            try { check(rendered.getPixel(96, 96) == android.graphics.Color.RED, "File icon renders without original document"); }
+            finally { rendered.recycle(); }
+            IconRepository.App app = new IconRepository.App(new ComponentName("dev.test.file", "dev.test.file.Main"), "Test");
+            Draft draft = new Draft();
+            draft.pack = pack.packageName;
+            draft.overrides.put(app.key(), reference);
+            TemplateStore store = new TemplateStore(isolated);
+            TemplateStore.Entry saved = store.save(draft, pack.label, false);
+            check(saved.fileIcons().length() == 1 && saved.fileIcons().has(reference),
+                    "Template embeds file image bytes, not just URI or path");
+            File stored = new File(FileIcons.directory(isolated), IconRepository.resourceName(reference) + ".png");
+            byte[] expected = Files.readAllBytes(stored.toPath());
+            Files.delete(stored.toPath());
+            Draft restored = store.open(saved.id());
+            check(reference.equals(restored.overrides.get(app.key())) && java.util.Arrays.equals(expected, Files.readAllBytes(stored.toPath())),
+                    "Template independently restores file icon after private working image is removed");
+            for (boolean full : new boolean[]{false, true}) {
+                ThemeEngine.Built built = ThemeEngine.build(context, "File icon check", full, IconShape.NONE, false,
+                        pack, List.of(app), restored.overrides, cover, (done, total) -> {});
+                try (ZipFile zip = new ZipFile(built.file());
+                     ZipInputStream icons = new ZipInputStream(zip.getInputStream(zip.getEntry("icons")))) {
+                    boolean found = false;
+                    for (ZipEntry entry; (entry = icons.getNextEntry()) != null;) {
+                        if (entry.getName().equals("dev.test.file.png")) {
+                            check(java.util.Arrays.equals(expected, icons.readAllBytes()),
+                                    "File icon pixels exported in installed-only and full-pack modes");
+                            found = true;
+                        }
+                    }
+                    check(found, "File override creates real application PNG in theme");
+                } finally { Files.delete(built.file().toPath()); }
+            }
+            check(ThemeEngine.coverIcons(pack, List.of(app), Map.of(app.key(), reference)) != null,
+                    "File reference does not break auto-cover selection");
+            byte[] before = Files.readAllBytes(new File(directory, "templates.json").toPath());
+            Files.delete(stored.toPath());
+            expectFailure(() -> store.save(restored, pack.label, false), "Missing file icon cannot silently disappear from template");
+            check(java.util.Arrays.equals(before, Files.readAllBytes(new File(directory, "templates.json").toPath())),
+                    "Failed file icon save preserves existing template");
+            store.open(saved.id());
+            expectFailure(() -> FileIcons.restore(isolated, "fileicon:i" + "0".repeat(64), expected),
+                    "Template file content hash is verified");
+            expectFailure(() -> FileIcons.render(FileIcons.directory(isolated), "fileicon:../../outside", 192),
+                    "File icon references reject traversal paths");
+        } finally {
+            pack.fileIcons = previousDirectory;
+            cover.recycle();
+            File icons = FileIcons.directory(isolated);
+            if (icons.isDirectory()) {
+                for (File file : icons.listFiles()) Files.delete(file.toPath());
+                Files.delete(icons.toPath());
+            }
+            for (File file : directory.listFiles()) Files.delete(file.toPath());
+            Files.delete(directory.toPath());
+        }
+    }
+
     private void verifyMaskGeometry(Context context, IconRepository repository, IconRepository.Pack base,
                                     List<IconRepository.PackInfo> packs) throws Exception {
         Bitmap padded = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
@@ -543,8 +629,9 @@ public final class DeviceTests extends Instrumentation {
         check(Draft.load(testContext).shape == IconShape.NONE, "Old drafts preserve unmasked behaviour");
         check(Draft.load(testContext).clearFolderBackground, "Old drafts enable agreed folder background fix by default");
         android.app.Activity activity = startActivitySync(new android.content.Intent(context, MainActivity.class)
-                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK));
         try {
+            runOnMainSync(() -> activity.getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON));
             waitForWork(activity);
             runOnMainSync(() -> {
                 check(findText(activity.getWindow().getDecorView(), context.getString(R.string.templates)) != null,
@@ -620,6 +707,7 @@ public final class DeviceTests extends Instrumentation {
             verifyOperationUi((MainActivity) activity);
             verifyThemeEditing((MainActivity) activity, pack);
             verifyWallpaperUi((MainActivity) activity);
+            verifyFileIconUi((MainActivity) activity, pack);
             verifyIconSourcePicker((MainActivity) activity, pack);
             verifyCropUi((MainActivity) activity);
             verifyTemplateExportUi((MainActivity) activity);
@@ -1050,6 +1138,87 @@ public final class DeviceTests extends Instrumentation {
             check(Files.readString(original.toPath()).equals("Keep original"), "Failed replacement preserves original bytes");
         } finally {
             Files.deleteIfExists(original.toPath()); Files.deleteIfExists(replacement.toPath());
+        }
+    }
+
+    private void verifyFileIconUi(MainActivity activity, IconRepository.Pack pack) throws Exception {
+        Draft draft = (Draft) field(activity, "draft");
+        Map<String, String> originalOverrides = new LinkedHashMap<>(draft.overrides);
+        @SuppressWarnings("unchecked")
+        IconRepository.App app = ((List<IconRepository.App>) field(activity, "apps")).get(0);
+        java.util.concurrent.atomic.AtomicBoolean changed = new java.util.concurrent.atomic.AtomicBoolean();
+        File input = File.createTempFile("file-icon-ui-", ".png", activity.getCacheDir());
+        Bitmap image = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+        image.eraseColor(android.graphics.Color.CYAN);
+        image.setPixel(96, 96, android.graphics.Color.rgb((int) (System.nanoTime() & 255), 21, 33));
+        try (FileOutputStream output = new FileOutputStream(input)) { image.compress(Bitmap.CompressFormat.PNG, 100, output); }
+        finally { image.recycle(); }
+        String[] created = {null};
+        android.content.IntentFilter pickerFilter = new android.content.IntentFilter(android.content.Intent.ACTION_OPEN_DOCUMENT);
+        pickerFilter.addDataType("image/*");
+        pickerFilter.addCategory(android.content.Intent.CATEGORY_OPENABLE);
+        ActivityMonitor picker = addMonitor(pickerFilter, null, true);
+        try {
+            runOnMainSync(() -> {
+                activity.showIcons(app, () -> changed.set(true));
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "iconDialog");
+                findText(dialog.getWindow().getDecorView(), activity.getString(R.string.choose_icon_file)).performClick();
+            });
+            waitForIdleSync();
+            check(picker.getHits() == 1, "File icon button launches standard document picker");
+            runOnMainSync(() -> activity.onActivityResult(14, android.app.Activity.RESULT_OK,
+                    new android.content.Intent().setData(Uri.fromFile(input))));
+            waitForWork(activity);
+            runOnMainSync(() -> {
+                android.app.Dialog preview = (android.app.Dialog) field(activity, "fileIconDialog");
+                check(preview != null && preview.isShowing(), "Selected file shown in preview before assignment");
+                check(!changed.get() && draft.overrides.equals(originalOverrides),
+                        "Preview does not assign icon before confirmation");
+                preview.onBackPressed();
+                check(!changed.get() && draft.overrides.equals(originalOverrides), "Cancelling preview preserves assignment");
+            });
+            runOnMainSync(() -> activity.onActivityResult(14, android.app.Activity.RESULT_OK,
+                    new android.content.Intent().setData(Uri.fromFile(input))));
+            waitForWork(activity);
+            runOnMainSync(() -> {
+                android.app.Dialog preview = (android.app.Dialog) field(activity, "fileIconDialog");
+                findText(preview.getWindow().getDecorView(), activity.getString(R.string.use_icon_file)).performClick();
+            });
+            waitForWork(activity);
+            check(changed.get() && FileIcons.isFile(draft.overrides.get(app.key())), "Confirming preview assigns persistent file reference");
+            created[0] = draft.overrides.get(app.key());
+            Bitmap actual = pack.render(created[0], 192);
+            try { check(actual.getPixel(40, 40) == android.graphics.Color.CYAN, "Confirmed file icon visible through normal rendering"); }
+            finally { actual.recycle(); }
+            Files.writeString(input.toPath(), "broken image");
+            runOnMainSync(() -> {
+                activity.showIcons(app, () -> changed.set(true));
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "iconDialog");
+                findText(dialog.getWindow().getDecorView(), activity.getString(R.string.choose_icon_file)).performClick();
+                activity.onActivityResult(14, android.app.Activity.RESULT_OK,
+                        new android.content.Intent().setData(Uri.fromFile(input)));
+            });
+            waitForWork(activity);
+            runOnMainSync(() -> {
+                check(created[0].equals(draft.overrides.get(app.key())), "Invalid file leaves confirmed icon unchanged");
+                android.app.AlertDialog error = (android.app.AlertDialog) field(activity, "errorDialog");
+                check(error != null && error.isShowing(), "Invalid file displays actionable error");
+                error.dismiss();
+            });
+        } finally {
+            removeMonitor(picker);
+            runOnMainSync(() -> {
+                draft.overrides.clear(); draft.overrides.putAll(originalOverrides);
+                try { draft.save(activity); } catch (Exception error) { throw new AssertionError(error); }
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "iconDialog");
+                if (dialog != null) dialog.dismiss();
+                dialog = (android.app.Dialog) field(activity, "fileIconDialog");
+                if (dialog != null) dialog.dismiss();
+            });
+            if (created[0] != null && !originalOverrides.containsValue(created[0])) {
+                Files.deleteIfExists(new File(FileIcons.directory(activity), IconRepository.resourceName(created[0]) + ".png").toPath());
+            }
+            Files.deleteIfExists(input.toPath());
         }
     }
 
