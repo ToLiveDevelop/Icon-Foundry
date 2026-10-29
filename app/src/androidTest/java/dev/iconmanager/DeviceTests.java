@@ -205,6 +205,11 @@ public final class DeviceTests extends Instrumentation {
                         && ThemeEngine.versionedTitle("Т".repeat(100), 2).length() == 100
                         && !Character.isHighSurrogate(ThemeEngine.versionedTitle("😀".repeat(50), 2).charAt(97)),
                 "Display title version suffix fits limit without splitting Unicode characters");
+        check(ThemeEngine.nextThemeTitle(java.util.Set.of("mello", "mello v2", "mello v4", "mellow v9"), "Mello")
+                        .equals("Mello v5")
+                        && ThemeEngine.nextThemeTitle(java.util.Set.of("mello"), "Mello").equals("Mello v2")
+                        && ThemeEngine.nextThemeTitle(java.util.Set.of("other v3"), "Mello").equals("Mello"),
+                "Theme title version continues after the highest existing version");
         for (String name : List.of(" .a/b:c*?\"<>|\n", "Т".repeat(100), "\uD83D\uDE00".repeat(50))) {
             String generated = ThemeEngine.datedFilename(name, createdAt);
             check(generated.length() <= 100 && generated.getBytes(StandardCharsets.UTF_8).length <= 255
@@ -861,6 +866,8 @@ public final class DeviceTests extends Instrumentation {
             runOnMainSync(() -> {
                 check(findText(activity.getWindow().getDecorView(), activity.getString(R.string.resume_draft)) == null,
                         "Unchanged draft saved by export does not offer to resume draft");
+                check(findText(activity.getWindow().getDecorView(), activity.getString(R.string.ready)) == null,
+                        "Template list does not show the draft autosave note");
                 android.widget.ListView list = findList(activity.getWindow().getDecorView());
                 check(list.getAdapter().getCount() == 2, "Start list shows both saved templates");
                 android.widget.LinearLayout item = (android.widget.LinearLayout) list.getAdapter().getView(0, null, list);
@@ -1163,6 +1170,10 @@ public final class DeviceTests extends Instrumentation {
                 check(left.rightMargin + right.leftMargin >= 12 * density - 1
                         && actionRow.topMargin >= 8 * density - 1 && actionRow.bottomMargin >= 12 * density - 1,
                         "Icon picker top actions have horizontal and vertical spacing");
+                android.widget.EditText searchField =                 findEdit(dialog.getWindow().getDecorView());
+                check(searchField != null && ((android.widget.LinearLayout.LayoutParams) searchField.getLayoutParams())
+                                .topMargin >= 12 * density - 1,
+                        "Search keeps spacing below source buttons when action row is hidden");
                 check(!(boolean) field(activity, "busy"), "Opening icon picker does not start loading other packs");
                 button.performClick();
             });

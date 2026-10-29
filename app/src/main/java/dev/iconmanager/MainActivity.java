@@ -186,7 +186,7 @@ public final class MainActivity extends Activity {
         empty.setGravity(Gravity.CENTER);
         root.addView(empty, new LinearLayout.LayoutParams(-1, 0, 1));
         list.setEmptyView(empty);
-        addDraftStatus();
+        status = null;
         Map<String, android.graphics.drawable.Drawable> badges = new java.util.HashMap<>();
         work(() -> {
             List<TemplateStore.Entry> entries = templates.list();
@@ -974,7 +974,10 @@ public final class MainActivity extends Activity {
         actionParams.topMargin = dp(8);
         actionParams.bottomMargin = dp(12);
         layout.addView(actions, actionParams);
-        EditText search = edit(R.string.search_icons, ""); search.setSingleLine(true); layout.addView(search);
+        EditText search = edit(R.string.search_icons, ""); search.setSingleLine(true);
+        LinearLayout.LayoutParams searchParams = new LinearLayout.LayoutParams(-1, -2);
+        if (actions.getVisibility() == View.GONE) searchParams.topMargin = dp(12);
+        layout.addView(search, searchParams);
         TextView count = text("", 13, MUTED); layout.addView(count);
         LinearLayout body = row();
         body.setGravity(Gravity.TOP);

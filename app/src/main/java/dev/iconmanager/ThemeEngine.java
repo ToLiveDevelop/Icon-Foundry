@@ -212,13 +212,22 @@ final class ThemeEngine {
     }
 
     static String availableThemeTitle(ContentResolver resolver, Uri tree, String title) throws IOException {
-        Set<String> existing = existingFoundryTitles(resolver, tree);
-        if (!existing.contains(title.toLowerCase(Locale.ROOT))) return title;
-        for (int version = 2; version <= 9999; version++) {
-            String candidate = versionedTitle(title, version);
-            if (!existing.contains(candidate.toLowerCase(Locale.ROOT))) return candidate;
+        return nextThemeTitle(existingFoundryTitles(resolver, tree), title);
+    }
+
+    static String nextThemeTitle(Set<String> existing, String title) throws IOException {
+        int latest = existing.contains(title.toLowerCase(Locale.ROOT)) ? 1 : 0;
+        java.util.regex.Pattern versioned = java.util.regex.Pattern.compile(".* v(\\d{1,4})");
+        for (String name : existing) {
+            java.util.regex.Matcher matcher = versioned.matcher(name);
+            if (!matcher.matches()) continue;
+            int version = Integer.parseInt(matcher.group(1));
+            if (version > latest && version >= 2
+                    && versionedTitle(title, version).toLowerCase(Locale.ROOT).equals(name)) latest = version;
         }
-        throw new IOException("Не удалось подобрать свободное название темы.");
+        if (latest == 0) return title;
+        if (latest >= 9999) throw new IOException("Не удалось подобрать свободное название темы.");
+        return versionedTitle(title, latest + 1);
     }
 
     static String versionedTitle(String title, int version) {
