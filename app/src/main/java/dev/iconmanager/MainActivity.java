@@ -79,7 +79,8 @@ public final class MainActivity extends Activity {
     private Button exportButton;
     private TextView packInfo, appInfo, destinationInfo, status, templateHelp;
     private ImageView coverPreview, wallpaperPreview;
-    private Button removeWallpaper;
+    private Button removeWallpaper, discardCover, destinationButton;
+    private TextView autoCoverInfo;
     private Dialog packDialog;
     private Dialog cropDialog;
     private Dialog iconDialog;
@@ -320,9 +321,12 @@ public final class MainActivity extends Activity {
         coverRow.addView(coverPreview, new LinearLayout.LayoutParams(dp(72), dp(128)));
         LinearLayout coverButtons = column();
         coverButtons.addView(button(R.string.choose_cover, view -> openFile(COVER, "image/*")));
-        coverButtons.addView(button(R.string.discard_cover, view -> {
+        discardCover = button(R.string.discard_cover, view -> {
             draft.coverPath = ""; saveDraft(); refresh();
-        }));
+        });
+        coverButtons.addView(discardCover);
+        autoCoverInfo = text(getString(R.string.auto_cover), 13, MUTED);
+        coverButtons.addView(autoCoverInfo);
         LinearLayout.LayoutParams coverButtonParams = new LinearLayout.LayoutParams(0, -2, 1);
         coverButtonParams.leftMargin = dp(16);
         coverRow.addView(coverButtons, coverButtonParams);
@@ -340,9 +344,7 @@ public final class MainActivity extends Activity {
             draft.wallpaperPath = ""; saveDraft(); refresh();
         });
         wallpaperButtons.addView(removeWallpaper);
-        LinearLayout.LayoutParams wallpaperParams = new LinearLayout.LayoutParams(0, -2, 1);
-        wallpaperParams.leftMargin = dp(16);
-        wallpaperRow.addView(wallpaperButtons, wallpaperParams);
+        wallpaperRow.addView(wallpaperButtons, new LinearLayout.LayoutParams(0, -2, 1));
         wallpaper.addView(wallpaperRow);
         packCard = card(body, R.string.theme_options);
         packCard.addView(text(getString(R.string.export_scope), 16, Color.WHITE));
@@ -422,14 +424,15 @@ public final class MainActivity extends Activity {
         }));
         LinearLayout destination = card(body, R.string.destination);
         destination.addView(text(getString(R.string.destination_help), 14, MUTED));
-        destination.addView(button(R.string.choose_destination, view -> {
+        destinationButton = button(R.string.choose_destination, view -> {
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
                     .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                             | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
             intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI,
                     DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Honor/Themes"));
             startActivityForResult(intent, DIRECTORY);
-        }));
+        });
+        destination.addView(destinationButton);
         destinationInfo = text("", 13, ACCENT); destination.addView(destinationInfo);
         templateHelp = text(getString(draft.templateId.isEmpty()
                 ? R.string.template_create_help : R.string.template_update_help), 13, MUTED);
@@ -460,6 +463,7 @@ public final class MainActivity extends Activity {
                     ThemeEngine.exportCount(apps, pack, draft.overrides, draft.fullPack)));
         }
         destinationInfo.setText(draft.tree.isEmpty() ? getString(R.string.no_destination) : "Honor/Themes");
+        destinationButton.setText(draft.tree.isEmpty() ? R.string.choose_destination : R.string.change_destination);
         refreshShapePreview();
         updateExportEnabled();
         if (!draft.coverPath.isEmpty()) {
@@ -470,7 +474,14 @@ public final class MainActivity extends Activity {
         }
         wallpaperPreview.setImageBitmap(draft.wallpaperPath.isEmpty() ? null
                 : BitmapFactory.decodeFile(new File(getFilesDir(), draft.wallpaperPath).getPath()));
-        removeWallpaper.setVisibility(draft.wallpaperPath.isEmpty() ? View.GONE : View.VISIBLE);
+        boolean hasWallpaper = !draft.wallpaperPath.isEmpty();
+        removeWallpaper.setVisibility(hasWallpaper ? View.VISIBLE : View.GONE);
+        wallpaperPreview.setVisibility(hasWallpaper ? View.VISIBLE : View.GONE);
+        View wallpaperButtons = (View) removeWallpaper.getParent();
+        ((ViewGroup.MarginLayoutParams) wallpaperButtons.getLayoutParams()).leftMargin = hasWallpaper ? dp(16) : 0;
+        wallpaperButtons.requestLayout();
+        discardCover.setVisibility(draft.coverPath.isEmpty() ? View.GONE : View.VISIBLE);
+        autoCoverInfo.setVisibility(draft.coverPath.isEmpty() ? View.VISIBLE : View.GONE);
     }
 
     private void updateExportEnabled() {
@@ -864,7 +875,14 @@ public final class MainActivity extends Activity {
         EditText search = edit(R.string.search_apps, "");
         search.setSingleLine(true); layout.addView(search);
         CheckBox missing = new CheckBox(this);
-        missing.setText(R.string.only_missing); layout.addView(missing);
+        missing.setText(R.string.only_missing);
+        CheckBox systemIcons = new CheckBox(this);
+        systemIcons.setText(R.string.system_icons);
+        systemIcons.setChecked(draft.systemIcons);
+        LinearLayout toggles = row();
+        toggles.addView(missing, new LinearLayout.LayoutParams(0, -2, 1));
+        toggles.addView(systemIcons, new LinearLayout.LayoutParams(-2, -2));
+        layout.addView(toggles);
         ListView list = new ListView(this);
         list.setDividerHeight(dp(1));
         layout.addView(list, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -893,7 +911,9 @@ public final class MainActivity extends Activity {
                         ? getString(draft.overrides.containsKey(app.key()) ? R.string.original : R.string.missing)
                         : getString(draft.overrides.containsKey(app.key()) ? R.string.manual : R.string.matched, selected);
                 ((TextView) labels.getChildAt(2)).setText(detail);
-                bindImage((ImageView) item.getChildAt(0), selected);
+                ImageView image = (ImageView) item.getChildAt(0);
+                if (selected == null && draft.systemIcons) bindSystemImage(image, app);
+                else bindImage(image, selected);
                 return item;
             }
         };
@@ -909,6 +929,9 @@ public final class MainActivity extends Activity {
         };
         watch(search, query -> filter.run());
         missing.setOnCheckedChangeListener((view, checked) -> filter.run());
+        systemIcons.setOnCheckedChangeListener((view, checked) -> {
+            draft.systemIcons = checked; saveDraft(); adapter.notifyDataSetChanged();
+        });
         list.setOnItemClickListener((parent, view, position, id) ->
                 showIcons(filtered.get(position), () -> { saveDraft(); filter.run(); refresh(); }));
         filter.run();
@@ -923,13 +946,8 @@ public final class MainActivity extends Activity {
         List<IconRepository.Pack> base = pack.members.isEmpty() ? List.of(pack) : pack.members;
         int[] tab = {Math.max(0, base.indexOf(initialSource(app)))};
         IconRepository.Pack[] custom = {null};
-        LinearLayout sourceBar = row();
+        LinearLayout sourceBar = column();
         layout.addView(sourceBar, new LinearLayout.LayoutParams(-1, -2));
-        layout.addView(button(R.string.choose_icon_file, view -> {
-            pendingIconApp = app.key();
-            pendingIconChanged = changed;
-            openFile(ICON_FILE, "image/*");
-        }));
         LinearLayout actions = row();
         Button automatic = button(R.string.automatic, view -> {
             draft.overrides.remove(app.key()); changed.run(); dialog.dismiss();
@@ -943,6 +961,15 @@ public final class MainActivity extends Activity {
         originalParams.leftMargin = dp(6);
         actions.addView(automatic, automaticParams);
         actions.addView(original, originalParams);
+        if (pack.selected(app, draft.overrides) == null) {
+            original.setVisibility(View.GONE);
+            automaticParams.rightMargin = 0;
+        }
+        if (!draft.overrides.containsKey(app.key())) {
+            automatic.setVisibility(View.GONE);
+            originalParams.leftMargin = 0;
+        }
+        if (automatic.getVisibility() == View.GONE && original.getVisibility() == View.GONE) actions.setVisibility(View.GONE);
         LinearLayout.LayoutParams actionParams = new LinearLayout.LayoutParams(-1, -2);
         actionParams.topMargin = dp(8);
         actionParams.bottomMargin = dp(12);
@@ -1009,8 +1036,10 @@ public final class MainActivity extends Activity {
                         filtered.add(new IconChoice(source, icon));
                 }
             }
-            String total = filtered.isEmpty() ? getString(R.string.no_icons) : Integer.toString(filtered.size());
-            count.setText(custom[0] != null ? custom[0].label + " · " + total : total);
+            String label = custom[0] != null ? custom[0].label : "";
+            if (filtered.isEmpty()) label = label.isEmpty() ? getString(R.string.no_icons) : label + " · " + getString(R.string.no_icons);
+            count.setText(label);
+            count.setVisibility(label.isEmpty() ? View.GONE : View.VISIBLE);
             boolean tabs = custom[0] == null && base.size() > 1;
             railScroll.setVisibility(tabs ? View.VISIBLE : View.GONE);
             for (int i = 0; i < rail.getChildCount(); i++) {
@@ -1048,7 +1077,7 @@ public final class MainActivity extends Activity {
         watch(search, filter);
         refreshPicker[0] = () -> {
             sourceBar.removeAllViews();
-            Button other = button(custom[0] == null ? R.string.other_pack : R.string.other_pack_short, view ->
+            Button other = button(R.string.other_pack, view ->
                     choosePack(loaded -> {
                         if (!dialog.isShowing()) return;
                         custom[0] = loaded;
@@ -1056,19 +1085,27 @@ public final class MainActivity extends Activity {
                         filter.accept(search.getText().toString());
                         grid.setSelection(0);
                     }, java.util.Set.copyOf(base.stream().map(member -> member.packageName).toList())));
-            if (custom[0] == null) { sourceBar.addView(other, new LinearLayout.LayoutParams(-1, -2)); return; }
+            Button file = button(R.string.choose_icon_file, view -> {
+                pendingIconApp = app.key();
+                pendingIconChanged = changed;
+                openFile(ICON_FILE, "image/*");
+            });
+            LinearLayout sources = row();
+            LinearLayout.LayoutParams otherParams = new LinearLayout.LayoutParams(0, -2, 1);
+            otherParams.rightMargin = dp(6);
+            LinearLayout.LayoutParams fileParams = new LinearLayout.LayoutParams(0, -2, 1);
+            fileParams.leftMargin = dp(6);
+            sources.addView(other, otherParams);
+            sources.addView(file, fileParams);
+            if (custom[0] == null) { sourceBar.addView(sources, new LinearLayout.LayoutParams(-1, -2)); return; }
             Button back = button(base.size() > 1 ? R.string.template_packs : R.string.template_pack, view -> {
                 custom[0] = null;
                 refreshPicker[0].run();
                 filter.accept(search.getText().toString());
                 grid.setSelection(0);
             });
-            LinearLayout.LayoutParams backParams = new LinearLayout.LayoutParams(0, -2, 1);
-            backParams.rightMargin = dp(6);
-            LinearLayout.LayoutParams otherParams = new LinearLayout.LayoutParams(0, -2, 1);
-            otherParams.leftMargin = dp(6);
-            sourceBar.addView(back, backParams);
-            sourceBar.addView(other, otherParams);
+            sourceBar.addView(back, new LinearLayout.LayoutParams(-1, -2));
+            sourceBar.addView(sources, new LinearLayout.LayoutParams(-1, -2));
         };
         refreshPicker[0].run();
         grid.setOnItemClickListener((parent, view, position, id) -> {
@@ -1140,6 +1177,20 @@ public final class MainActivity extends Activity {
         dialog.show();
         dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
         dialog.getWindow().setLayout(Math.min(dp(360), getResources().getDisplayMetrics().widthPixels - dp(32)), -2);
+    }
+
+    private void bindSystemImage(ImageView view, IconRepository.App app) {
+        String key = "system:" + app.key();
+        view.setTag(key);
+        view.setImageResource(R.drawable.app_icon);
+        thumbnails.execute(() -> {
+            try {
+                var icon = getPackageManager().getActivityIcon(app.component());
+                runOnUiThread(() -> { if (!isDestroyed() && key.equals(view.getTag())) view.setImageDrawable(icon); });
+            } catch (android.content.pm.PackageManager.NameNotFoundException | RuntimeException ignored) {
+                // Apps that are not installed have no system icon; the placeholder stays.
+            }
+        });
     }
 
     private void bindImage(ImageView view, String name) {

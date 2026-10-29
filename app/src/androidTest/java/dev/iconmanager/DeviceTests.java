@@ -653,6 +653,12 @@ public final class DeviceTests extends Instrumentation {
                 .has("templateName"), "Obsolete template selection no longer saved");
         testContext.getSharedPreferences("draft", 0).edit().putString("json", "{}").commit();
         check(Draft.load(testContext).shape == IconShape.NONE, "Old drafts preserve unmasked behaviour");
+        check(new Draft().shape == IconShape.ROUNDED_SQUARE && !new Draft().systemIcons,
+                "New themes default to rounded square mask and hide system icons");
+        Draft withSystem = Draft.fromJson(new org.json.JSONObject("{}"));
+        check(!withSystem.toJson().has("systemIcons"), "Disabled system icon preview keeps old template format");
+        withSystem.systemIcons = true;
+        check(Draft.fromJson(withSystem.toJson()).systemIcons, "System icon preview choice is stored in template");
         check(Draft.load(testContext).clearFolderBackground, "Old drafts enable agreed folder background fix by default");
         android.app.Activity activity = startActivitySync(new android.content.Intent(context, MainActivity.class)
                 .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK));
@@ -674,6 +680,18 @@ public final class DeviceTests extends Instrumentation {
                                 == ((Draft) field(activity, "draft")).packs.size()
                                 && ((android.widget.LinearLayout) field(activity, "packList")).isLaidOut(),
                         "Template loader closes only after base packs are drawn");
+                Draft shown = (Draft) field(activity, "draft");
+                boolean manualCover = !shown.coverPath.isEmpty();
+                check(((android.view.View) field(activity, "discardCover")).getVisibility()
+                                == (manualCover ? android.view.View.VISIBLE : android.view.View.GONE)
+                        && ((android.view.View) field(activity, "autoCoverInfo")).getVisibility()
+                                == (manualCover ? android.view.View.GONE : android.view.View.VISIBLE),
+                        "Auto-cover action only for chosen covers, otherwise automatic cover note");
+                check(((android.widget.Button) field(activity, "destinationButton")).getText().toString().equals(
+                                activity.getString(shown.tree.isEmpty() ? R.string.choose_destination : R.string.change_destination)),
+                        "Destination button offers changing an already chosen folder");
+                check(shown.wallpaperPath.isEmpty() == (((android.view.View) field(activity, "wallpaperPreview")).getVisibility()
+                                == android.view.View.GONE), "Wallpaper button spans full width without wallpaper");
                 android.widget.LinearLayout root = (android.widget.LinearLayout) field(activity, "root");
                 check(((android.graphics.drawable.ColorDrawable) root.getBackground()).getColor()
                         == android.graphics.Color.BLACK, "Main screen background is black");
@@ -1128,9 +1146,18 @@ public final class DeviceTests extends Instrumentation {
                         activity.getString(R.string.automatic));
                 android.widget.Button originalButton = (android.widget.Button) findText(dialog.getWindow().getDecorView(),
                         activity.getString(R.string.keep_original));
+                android.widget.Button fileButton = (android.widget.Button) findText(dialog.getWindow().getDecorView(),
+                        activity.getString(R.string.choose_icon_file));
+                check(fileButton != null && fileButton.getParent() == button.getParent(),
+                        "Other pack and file buttons share one row");
+                check(originalButton.getVisibility() == android.view.View.GONE
+                                && automatic.getVisibility() == android.view.View.GONE,
+                        "Keep-system and template reset hidden while the system icon is used without manual choice");
+                check(findText(dialog.getWindow().getDecorView(), "Совпадений нет") == null
+                        && !hasDigitsOnlyText(dialog.getWindow().getDecorView()), "Icon picker shows no result count");
                 float density = activity.getResources().getDisplayMetrics().density;
-                var left = (android.widget.LinearLayout.LayoutParams) automatic.getLayoutParams();
-                var right = (android.widget.LinearLayout.LayoutParams) originalButton.getLayoutParams();
+                var left = (android.widget.LinearLayout.LayoutParams) button.getLayoutParams();
+                var right = (android.widget.LinearLayout.LayoutParams) fileButton.getLayoutParams();
                 var actionRow = (android.widget.LinearLayout.LayoutParams)
                         ((android.view.View) automatic.getParent()).getLayoutParams();
                 check(left.rightMargin + right.leftMargin >= 12 * density - 1
@@ -1160,7 +1187,7 @@ public final class DeviceTests extends Instrumentation {
                 android.widget.GridView grid = findGrid(dialog.getWindow().getDecorView());
                 check(grid != null && grid.getAdapter().getCount() > 0, "Chosen source catalogue appears in icon grid");
                 check(findText(dialog.getWindow().getDecorView(), activity.getString(((IconRepository.Pack) field(activity, "pack")).members.size() > 1 ? R.string.template_packs : R.string.template_pack)) != null
-                                && findText(dialog.getWindow().getDecorView(), activity.getString(R.string.other_pack_short)) != null,
+                                && findText(dialog.getWindow().getDecorView(), activity.getString(R.string.other_pack)) != null,
                         "Another pack offers return to template pack and another choice");
                 grid.performItemClick(grid.getAdapter().getView(0, null, grid), 0, 0);
                 check(selected.get() && draft.overrides.get(app.key()).startsWith(source[0] + ":"),
@@ -1187,6 +1214,16 @@ public final class DeviceTests extends Instrumentation {
             }
         }
         return null;
+    }
+
+    private boolean hasDigitsOnlyText(android.view.View view) {
+        if (view instanceof android.widget.TextView text && !(view instanceof android.widget.EditText)
+                && view.getVisibility() == android.view.View.VISIBLE && text.getText().toString().matches("\\d+")) return true;
+        if (view instanceof android.widget.GridView) return false;
+        if (view instanceof android.view.ViewGroup group) {
+            for (int i = 0; i < group.getChildCount(); i++) if (hasDigitsOnlyText(group.getChildAt(i))) return true;
+        }
+        return false;
     }
 
     private android.widget.GridView findGrid(android.view.View view) {

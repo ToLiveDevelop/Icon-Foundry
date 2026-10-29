@@ -19,7 +19,8 @@ final class Draft {
     String templateId = "";
     boolean fullPack;
     boolean clearFolderBackground = true;
-    IconShape shape = IconShape.NONE;
+    boolean systemIcons;
+    IconShape shape = IconShape.ROUNDED_SQUARE;
     final Map<String, String> overrides = new LinkedHashMap<>();
 
     static Draft load(Context context) throws JSONException {
@@ -41,6 +42,7 @@ final class Draft {
         d.templateId = j.optString("templateId");
         d.fullPack = j.optBoolean("fullPack");
         d.clearFolderBackground = j.optBoolean("clearFolderBackground", true);
+        d.systemIcons = j.optBoolean("systemIcons");
         try {
             d.shape = IconShape.valueOf(j.optString("shape", IconShape.NONE.name()));
         } catch (IllegalArgumentException error) {
@@ -108,6 +110,7 @@ final class Draft {
                 .put("overrides", new JSONObject(overrides));
         // A single pack keeps the original format, so older templates and fingerprints stay identical.
         if (packs.size() > 1) j.put("packs", new JSONArray(packs));
+        if (systemIcons) j.put("systemIcons", true);
         return j;
     }
 
