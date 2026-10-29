@@ -15,7 +15,10 @@
     <string name="template_update_help">Экспорт обновит шаблон и время сохранения.</string>
     <string name="save_as_new_template">Сохранить как новый шаблон</string>
     <string name="template_saved">Шаблон сохранён: %1$s</string>
-    <string name="icon_source">Иконпак: %1$s · выбрать другой</string>
+    <string name="other_pack">Выбрать другой иконпак</string>
+    <string name="other_pack_short">Выбрать другой</string>
+    <string name="template_pack">Вернуть иконпак шаблона</string>
+    <string name="template_packs">Вернуть иконпаки шаблона</string>
     <string name="title_hint">Название темы</string>
     <string name="theme_title">Название темы</string>
     <string name="filename_help">Имя .hnt создаётся автоматически. Если такое название уже есть среди тем Icon Foundry, добавится номер версии.</string>

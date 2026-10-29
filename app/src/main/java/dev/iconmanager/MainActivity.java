@@ -31,6 +31,7 @@ import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.GridView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -135,7 +136,7 @@ public final class MainActivity extends Activity {
         }, loaded -> {
             packs.addAll(loaded); pack = IconRepository.combine(packs); refresh();
             if (!missing.isEmpty()) showError(new IOException(getString(R.string.packs_missing, String.join(", ", missing))));
-        });
+        }, () -> {}, true);
     }
 
     private void prepareScreen() {
@@ -919,10 +920,11 @@ public final class MainActivity extends Activity {
         iconDialog = dialog;
         dialog.setOnDismissListener(ignored -> { if (iconDialog == dialog) iconDialog = null; });
         LinearLayout layout = dialogLayout(dialog, getString(R.string.pick_icon, app.label()));
-        IconRepository.Pack[] source = {initialSource(app)};
-        Button sourceButton = button(R.string.choose_pack, view -> {});
-        sourceButton.setText(getString(R.string.icon_source, source[0].label));
-        layout.addView(sourceButton);
+        List<IconRepository.Pack> base = pack.members.isEmpty() ? List.of(pack) : pack.members;
+        int[] tab = {Math.max(0, base.indexOf(initialSource(app)))};
+        IconRepository.Pack[] custom = {null};
+        LinearLayout sourceBar = row();
+        layout.addView(sourceBar, new LinearLayout.LayoutParams(-1, -2));
         layout.addView(button(R.string.choose_icon_file, view -> {
             pendingIconApp = app.key();
             pendingIconChanged = changed;
@@ -947,11 +949,21 @@ public final class MainActivity extends Activity {
         layout.addView(actions, actionParams);
         EditText search = edit(R.string.search_icons, ""); search.setSingleLine(true); layout.addView(search);
         TextView count = text("", 13, MUTED); layout.addView(count);
+        LinearLayout body = row();
+        body.setGravity(Gravity.TOP);
+        layout.addView(body, new LinearLayout.LayoutParams(-1, 0, 1));
+        ScrollView railScroll = new ScrollView(this);
+        railScroll.setVerticalScrollBarEnabled(false);
+        LinearLayout rail = column();
+        rail.setPadding(0, dp(4), dp(8), dp(4));
+        railScroll.addView(rail);
+        body.addView(railScroll, new LinearLayout.LayoutParams(-2, -1));
         GridView grid = new GridView(this);
         grid.setNumColumns(GridView.AUTO_FIT); grid.setColumnWidth(dp(96));
         grid.setStretchMode(GridView.STRETCH_COLUMN_WIDTH);
-        layout.addView(grid, new LinearLayout.LayoutParams(-1, 0, 1));
-        List<IconRepository.Icon> filtered = new ArrayList<>();
+        body.addView(grid, new LinearLayout.LayoutParams(0, -1, 1));
+        List<IconChoice> filtered = new ArrayList<>();
+        boolean[] mixed = {false};
         BaseAdapter adapter = new BaseAdapter() {
             @Override public int getCount() { return filtered.size(); }
             @Override public Object getItem(int position) { return filtered.get(position); }
@@ -960,42 +972,120 @@ public final class MainActivity extends Activity {
                 LinearLayout tile;
                 if (convert == null) {
                     tile = column(); tile.setGravity(Gravity.CENTER); tile.setPadding(dp(4), dp(8), dp(4), dp(8));
-                    ImageView image = new ImageView(MainActivity.this);
-                    tile.addView(image, new LinearLayout.LayoutParams(dp(64), dp(64)));
+                    FrameLayout frame = new FrameLayout(MainActivity.this);
+                    frame.addView(new ImageView(MainActivity.this), new FrameLayout.LayoutParams(dp(64), dp(64)));
+                    ImageView origin = new ImageView(MainActivity.this);
+                    origin.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                    origin.setPadding(dp(2), dp(2), dp(2), dp(2));
+                    origin.setBackground(rounded(PANEL, 12));
+                    frame.addView(origin, new FrameLayout.LayoutParams(dp(24), dp(24), Gravity.END | Gravity.BOTTOM));
+                    tile.addView(frame, new LinearLayout.LayoutParams(dp(72), dp(68)));
                     TextView name = text("", 10, MUTED); name.setMaxLines(2); name.setGravity(Gravity.CENTER);
                     tile.addView(name, new LinearLayout.LayoutParams(-1, dp(38)));
                 } else tile = (LinearLayout) convert;
-                IconRepository.Icon icon = filtered.get(position);
-                ((TextView) tile.getChildAt(1)).setText(icon.name());
-                tile.setContentDescription(icon.name() + " · " + icon.category());
-                bindImage((ImageView) tile.getChildAt(0), source[0], icon.name());
+                IconChoice choice = filtered.get(position);
+                FrameLayout frame = (FrameLayout) tile.getChildAt(0);
+                ImageView origin = (ImageView) frame.getChildAt(1);
+                origin.setVisibility(mixed[0] ? View.VISIBLE : View.GONE);
+                origin.setImageBitmap(mixed[0] ? choice.source().badge : null);
+                ((TextView) tile.getChildAt(1)).setText(choice.icon().name());
+                tile.setContentDescription(choice.icon().name() + " · " + choice.icon().category()
+                        + (mixed[0] ? " · " + choice.source().label : ""));
+                bindImage((ImageView) frame.getChildAt(0), choice.source(), choice.icon().name());
                 return tile;
             }
         };
         grid.setAdapter(adapter);
+        Runnable[] refreshPicker = new Runnable[1];
         Consumer<String> filter = query -> {
             String q = query.toLowerCase(Locale.ROOT).trim();
+            List<IconRepository.Pack> sources = custom[0] != null ? List.of(custom[0])
+                    : q.isEmpty() ? List.of(base.get(tab[0])) : base;
+            mixed[0] = sources.size() > 1;
             filtered.clear();
-            for (IconRepository.Icon icon : source[0].icons.values()) {
-                if ((icon.name() + " " + icon.category()).toLowerCase(Locale.ROOT).contains(q)) filtered.add(icon);
+            for (IconRepository.Pack source : sources) {
+                for (IconRepository.Icon icon : source.icons.values()) {
+                    if ((icon.name() + " " + icon.category()).toLowerCase(Locale.ROOT).contains(q))
+                        filtered.add(new IconChoice(source, icon));
+                }
             }
-            count.setText(filtered.isEmpty() ? getString(R.string.no_icons) : Integer.toString(filtered.size()));
+            String total = filtered.isEmpty() ? getString(R.string.no_icons) : Integer.toString(filtered.size());
+            count.setText(custom[0] != null ? custom[0].label + " · " + total : total);
+            boolean tabs = custom[0] == null && base.size() > 1;
+            railScroll.setVisibility(tabs ? View.VISIBLE : View.GONE);
+            for (int i = 0; i < rail.getChildCount(); i++) {
+                IconRepository.Pack member = base.get(i);
+                View item = rail.getChildAt(i);
+                boolean active = q.isEmpty() ? i == tab[0] : filtered.stream().anyMatch(choice -> choice.source() == member);
+                item.setSelected(q.isEmpty() && i == tab[0]);
+                item.setBackground(packTab(q.isEmpty() && i == tab[0]));
+                item.setAlpha(active || q.isEmpty() ? 1 : .35f);
+            }
             adapter.notifyDataSetChanged();
         };
+        for (int i = 0; i < base.size(); i++) {
+            int index = i;
+            IconRepository.Pack member = base.get(i);
+            ImageView item = new ImageView(this);
+            item.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            item.setPadding(dp(8), dp(8), dp(8), dp(8));
+            item.setImageBitmap(member.badge);
+            item.setContentDescription(member.label);
+            item.setTooltipText(member.label);
+            item.setOnClickListener(view -> {
+                if (search.getText().toString().isBlank()) {
+                    tab[0] = index; filter.accept(""); grid.setSelection(0);
+                } else {
+                    for (int position = 0; position < filtered.size(); position++) {
+                        if (filtered.get(position).source() == member) { grid.setSelection(position); break; }
+                    }
+                }
+            });
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(56), dp(56));
+            params.bottomMargin = dp(6);
+            rail.addView(item, params);
+        }
         watch(search, filter);
-        sourceButton.setOnClickListener(view -> choosePack(loaded -> {
-            if (!dialog.isShowing()) return;
-            source[0] = loaded;
-            sourceButton.setText(getString(R.string.icon_source, loaded.label));
-            filter.accept(search.getText().toString());
-            grid.smoothScrollToPosition(0);
-        }));
+        refreshPicker[0] = () -> {
+            sourceBar.removeAllViews();
+            Button other = button(custom[0] == null ? R.string.other_pack : R.string.other_pack_short, view ->
+                    choosePack(loaded -> {
+                        if (!dialog.isShowing()) return;
+                        custom[0] = loaded;
+                        refreshPicker[0].run();
+                        filter.accept(search.getText().toString());
+                        grid.setSelection(0);
+                    }, java.util.Set.copyOf(base.stream().map(member -> member.packageName).toList())));
+            if (custom[0] == null) { sourceBar.addView(other, new LinearLayout.LayoutParams(-1, -2)); return; }
+            Button back = button(base.size() > 1 ? R.string.template_packs : R.string.template_pack, view -> {
+                custom[0] = null;
+                refreshPicker[0].run();
+                filter.accept(search.getText().toString());
+                grid.setSelection(0);
+            });
+            LinearLayout.LayoutParams backParams = new LinearLayout.LayoutParams(0, -2, 1);
+            backParams.rightMargin = dp(6);
+            LinearLayout.LayoutParams otherParams = new LinearLayout.LayoutParams(0, -2, 1);
+            otherParams.leftMargin = dp(6);
+            sourceBar.addView(back, backParams);
+            sourceBar.addView(other, otherParams);
+        };
+        refreshPicker[0].run();
         grid.setOnItemClickListener((parent, view, position, id) -> {
-            draft.overrides.put(app.key(), IconRepository.reference(source[0].packageName, filtered.get(position).name()));
+            IconChoice choice = filtered.get(position);
+            draft.overrides.put(app.key(), IconRepository.reference(choice.source().packageName, choice.icon().name()));
             changed.run(); dialog.dismiss();
         });
         filter.accept("");
         showFull(dialog);
+    }
+
+    record IconChoice(IconRepository.Pack source, IconRepository.Icon icon) {}
+
+    private GradientDrawable packTab(boolean selected) {
+        GradientDrawable shape = rounded(selected ? CONTROL : Color.TRANSPARENT, 14);
+        if (selected) shape.setStroke(dp(2), ACCENT);
+        return shape;
     }
 
     private IconRepository.Pack initialSource(IconRepository.App app) {
@@ -1181,6 +1271,11 @@ public final class MainActivity extends Activity {
     }
 
     private <T> void work(String message, Callable<T> action, Consumer<T> success, Runnable failure) {
+        work(message, action, success, failure, false);
+    }
+
+    /** With {@code untilDrawn}, progress stays visible until the UI built by {@code success} reaches the screen. */
+    private <T> void work(String message, Callable<T> action, Consumer<T> success, Runnable failure, boolean untilDrawn) {
         if (busy) { showError(new IOException(getString(R.string.busy))); return; }
         busy = true;
         enabled(root, false);
@@ -1189,7 +1284,15 @@ public final class MainActivity extends Activity {
         worker.execute(() -> {
             try {
                 T result = action.call();
-                runOnUiThread(() -> { if (!isDestroyed()) { finishWork(); success.accept(result); } });
+                runOnUiThread(() -> {
+                    if (isDestroyed()) return;
+                    if (!untilDrawn) { finishWork(); success.accept(result); return; }
+                    try { success.accept(result); }
+                    finally {
+                        root.getViewTreeObserver().registerFrameCommitCallback(() -> { if (!isDestroyed()) finishWork(); });
+                        root.invalidate();
+                    }
+                });
             } catch (Exception error) {
                 Log.e("IconManager", "Operation failed", error);
                 runOnUiThread(() -> { if (!isDestroyed()) { finishWork(); failure.run(); showError(error); } });

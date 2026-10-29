@@ -263,7 +263,7 @@ public final class DeviceTests extends Instrumentation {
                 String xml = new String(zip.getInputStream(zip.getEntry("description.xml")).readAllBytes(), StandardCharsets.UTF_8);
                 check(xml.contains("&amp;") && xml.contains("&lt;"), "Title escaped as XML");
                 check(xml.contains("<HnTheme>"), "Honor metadata root retained");
-                verifyDescription(xml.getBytes(StandardCharsets.UTF_8), "Проверка & <иконки>", pack.label);
+                verifyDescription(xml.getBytes(StandardCharsets.UTF_8), "Проверка & <иконки>", ThemeEngine.credits(List.of(pack.label)));
                 check(zip.size() == 6 && zip.getEntry("preview/icon_small.jpg") != null,
                         "Icon-only theme includes catalogue thumbnail and explicit preview directory");
                 try (ZipInputStream icons = new ZipInputStream(zip.getInputStream(zip.getEntry("icons")))) {
@@ -670,6 +670,10 @@ public final class DeviceTests extends Instrumentation {
                 android.util.TypedValue accent = new android.util.TypedValue();
                 activity.getTheme().resolveAttribute(android.R.attr.colorAccent, accent, true);
                 check(accent.data == android.graphics.Color.rgb(255, 193, 7), "App theme uses amber accent");
+                check(((android.widget.LinearLayout) field(activity, "packList")).getChildCount()
+                                == ((Draft) field(activity, "draft")).packs.size()
+                                && ((android.widget.LinearLayout) field(activity, "packList")).isLaidOut(),
+                        "Template loader closes only after base packs are drawn");
                 android.widget.LinearLayout root = (android.widget.LinearLayout) field(activity, "root");
                 check(((android.graphics.drawable.ColorDrawable) root.getBackground()).getColor()
                         == android.graphics.Color.BLACK, "Main screen background is black");
@@ -799,7 +803,9 @@ public final class DeviceTests extends Instrumentation {
                     boolean found = false;
                     for (ZipEntry entry; (entry = zip.getNextEntry()) != null;) {
                         if (entry.getName().equals("description.xml")) {
-                            verifyDescription(zip.readAllBytes(), expectedTitle, ((IconRepository.Pack) field(activity, "pack")).label);
+                            IconRepository.Pack used = (IconRepository.Pack) field(activity, "pack");
+                            verifyDescription(zip.readAllBytes(), expectedTitle, ThemeEngine.credits(used.members.isEmpty()
+                                    ? List.of(used.label) : used.members.stream().map(member -> member.label).toList()));
                             found = true;
                             break;
                         }
@@ -968,7 +974,7 @@ public final class DeviceTests extends Instrumentation {
         return ids;
     }
 
-    private void verifyDescription(byte[] xml, String title, String packLabel) throws Exception {
+    private void verifyDescription(byte[] xml, String title, String credits) throws Exception {
         var parser = android.util.Xml.newPullParser();
         parser.setInput(new java.io.ByteArrayInputStream(xml), "UTF-8");
         Map<String, String> fields = new LinkedHashMap<>();
@@ -983,9 +989,8 @@ public final class DeviceTests extends Instrumentation {
         check("Icon Foundry by ToLive".equals(fields.get("author"))
                         && "Icon Foundry by ToLive".equals(fields.get("designer")),
                 "Theme credits identify Icon Foundry by ToLive in author and designer fields");
-        check(("На основе иконпака «" + packLabel
-                        + "». Права на иконки принадлежат разработчику иконпака. Только для персонального использования.")
-                        .equals(fields.get("briefInfo")),
+        check(credits.startsWith("На основе иконпак") && credits.endsWith("Только для персонального использования.")
+                        && credits.equals(fields.get("briefInfo")),
                 "Description credits actual base pack and its developer, with personal-use restriction");
         check("12".equals(fields.get("version")), "Compatible theme revision retained without risky automatic upgrades");
     }
@@ -1117,7 +1122,7 @@ public final class DeviceTests extends Instrumentation {
                 activity.showIcons(app, () -> selected.set(true));
                 android.app.Dialog dialog = (android.app.Dialog) field(activity, "iconDialog");
                 android.widget.Button button = (android.widget.Button) findText(dialog.getWindow().getDecorView(),
-                        activity.getString(R.string.icon_source, pack.label));
+                        activity.getString(R.string.other_pack));
                 check(button != null, "Icon picker initially offers current base pack");
                 android.widget.Button automatic = (android.widget.Button) findText(dialog.getWindow().getDecorView(),
                         activity.getString(R.string.automatic));
@@ -1154,6 +1159,9 @@ public final class DeviceTests extends Instrumentation {
                 android.app.Dialog dialog = (android.app.Dialog) field(activity, "iconDialog");
                 android.widget.GridView grid = findGrid(dialog.getWindow().getDecorView());
                 check(grid != null && grid.getAdapter().getCount() > 0, "Chosen source catalogue appears in icon grid");
+                check(findText(dialog.getWindow().getDecorView(), activity.getString(((IconRepository.Pack) field(activity, "pack")).members.size() > 1 ? R.string.template_packs : R.string.template_pack)) != null
+                                && findText(dialog.getWindow().getDecorView(), activity.getString(R.string.other_pack_short)) != null,
+                        "Another pack offers return to template pack and another choice");
                 grid.performItemClick(grid.getAdapter().getView(0, null, grid), 0, 0);
                 check(selected.get() && draft.overrides.get(app.key()).startsWith(source[0] + ":"),
                         "Picker persists both resource and source package");
@@ -1168,6 +1176,17 @@ public final class DeviceTests extends Instrumentation {
                 if (dialog != null) dialog.dismiss();
             });
         }
+    }
+
+    private android.widget.EditText findEdit(android.view.View view) {
+        if (view instanceof android.widget.EditText edit) return edit;
+        if (view instanceof android.view.ViewGroup group) {
+            for (int i = 0; i < group.getChildCount(); i++) {
+                android.widget.EditText found = findEdit(group.getChildAt(i));
+                if (found != null) return found;
+            }
+        }
+        return null;
     }
 
     private android.widget.GridView findGrid(android.view.View view) {
@@ -1565,13 +1584,16 @@ public final class DeviceTests extends Instrumentation {
         syntheticMapping(other, pack, "dev.app.second/.Main", pack.icons.keySet().iterator().next());
         Draft draft = (Draft) field(activity, "draft");
         List<String> original = List.copyOf(draft.packs);
+        int n = original.size();
+        List<String> added = new ArrayList<>(original); added.add("dev.pack.second");
+        List<String> raised = new ArrayList<>(original); raised.add(n - 1, "dev.pack.second");
         try {
             onMain(() -> {
-                check(original.equals(List.of(pack.packageName)), "Editor starts with the real base pack");
+                check(n >= 1 && n < IconRepository.MAX_PACKS && original.contains(pack.packageName),
+                        "Editor starts with the user's base packs");
                 activity.selectPack(other);
                 android.widget.LinearLayout list = (android.widget.LinearLayout) field(activity, "packList");
-                check(draft.packs.equals(List.of(pack.packageName, "dev.pack.second")) && list.getChildCount() == 2,
-                        "Second pack is appended with lower priority");
+                check(draft.packs.equals(added) && list.getChildCount() == n + 1, "Added pack is appended with lowest priority");
                 IconRepository.Pack combined = (IconRepository.Pack) field(activity, "pack");
                 check(combined.packageNames().equals(draft.packs), "Editor uses the combined pack in list order");
                 check(((android.view.ViewGroup) list.getChildAt(0)).getChildAt(0).getVisibility() == android.view.View.VISIBLE,
@@ -1579,14 +1601,39 @@ public final class DeviceTests extends Instrumentation {
                 check(((android.widget.TextView) field(activity, "packInfo")).getText().toString()
                         .equals(activity.getString(R.string.pack_priority_help)), "Priority rule is explained");
                 activity.selectPack(other);
-                check(draft.packs.size() == 2, "The same pack cannot be added twice");
+                check(draft.packs.size() == n + 1, "The same pack cannot be added twice");
+                IconRepository.App app = new IconRepository.App(new ComponentName("dev.app.second", "dev.app.second.Main"), "Second");
+                activity.showIcons(app, () -> {});
+                android.app.Dialog icons = (android.app.Dialog) field(activity, "iconDialog");
+                android.view.View decor = icons.getWindow().getDecorView();
+                android.widget.GridView grid = findGrid(decor);
+                android.widget.ScrollView railScroll = (android.widget.ScrollView) ((android.view.ViewGroup) grid.getParent()).getChildAt(0);
+                android.widget.LinearLayout rail = (android.widget.LinearLayout) railScroll.getChildAt(0);
+                check(railScroll.getVisibility() == android.view.View.VISIBLE && rail.getChildCount() == n + 1
+                                && "Second".contentEquals(rail.getChildAt(n).getContentDescription()) && rail.getChildAt(n).isSelected()
+                                && rail.getChildAt(n) instanceof android.widget.ImageView,
+                        "Picker shows icon-only pack tabs and opens the pack supplying the app");
+                check(grid.getAdapter().getCount() == 1, "Selected tab shows only its pack");
+                check(findText(decor, activity.getString(R.string.other_pack)) != null, "Picker offers another icon pack");
+                rail.getChildAt(0).performClick();
+                check(grid.getAdapter().getCount() == combined.members.get(0).icons.size() && rail.getChildAt(0).isSelected()
+                                && !rail.getChildAt(n).isSelected(), "Tapping a tab switches the pack");
+                android.widget.EditText search = findEdit(decor);
+                search.setText(other.icons.keySet().iterator().next());
+                boolean second = false, others = false;
+                for (int i = 0; i < grid.getAdapter().getCount(); i++) {
+                    String owner = ((MainActivity.IconChoice) grid.getAdapter().getItem(i)).source().packageName;
+                    if (owner.equals("dev.pack.second")) second = true; else others = true;
+                }
+                check(second && others, "Search covers every template pack at once");
+                icons.dismiss();
             });
             waitForIdleSync();
             onMain(() -> {
                 android.widget.LinearLayout list = (android.widget.LinearLayout) field(activity, "packList");
-                android.view.View row = list.getChildAt(1);
+                android.view.View row = list.getChildAt(n);
                 android.view.View handle = ((android.view.ViewGroup) row).getChildAt(0);
-                float distance = row.getTop() - list.getChildAt(0).getTop();
+                float distance = row.getTop() - list.getChildAt(n - 1).getTop();
                 check(distance > 0, "Pack rows are laid out before dragging");
                 long time = android.os.SystemClock.uptimeMillis();
                 for (int[] step : new int[][]{{android.view.MotionEvent.ACTION_DOWN, 0},
@@ -1595,19 +1642,19 @@ public final class DeviceTests extends Instrumentation {
                     handle.dispatchTouchEvent(event);
                     event.recycle();
                 }
-                check(draft.packs.equals(List.of("dev.pack.second", pack.packageName)), "Dragging a pack up raises its priority");
+                check(draft.packs.equals(raised), "Dragging a pack up raises its priority");
                 android.widget.LinearLayout moved = (android.widget.LinearLayout) field(activity, "packList");
-                check(moved.getChildAt(0).performAccessibilityAction(R.id.pack_move_down, null)
-                                && draft.packs.equals(List.of(pack.packageName, "dev.pack.second")),
+                check(moved.getChildAt(n - 1).performAccessibilityAction(R.id.pack_move_down, null) && draft.packs.equals(added),
                         "Priority can also be changed with accessibility actions");
                 try {
                     check(Draft.load(activity).packs.equals(draft.packs), "Pack order is saved in the draft");
                 } catch (org.json.JSONException error) { throw new AssertionError(error); }
-                ((android.widget.Button) ((android.view.ViewGroup) moved.getChildAt(1)).getChildAt(3)).performClick();
-                check(draft.packs.equals(List.of(pack.packageName)) && ((IconRepository.Pack) field(activity, "pack")).members.isEmpty()
-                                && ((IconRepository.Pack) field(activity, "pack")).packageName.equals(pack.packageName),
-                        "Removing the second pack restores the original single-pack behaviour");
-                check(((android.widget.TextView) field(activity, "packInfo")).getVisibility() == android.view.View.GONE
+                ((android.widget.Button) ((android.view.ViewGroup) moved.getChildAt(n)).getChildAt(3)).performClick();
+                IconRepository.Pack restored = (IconRepository.Pack) field(activity, "pack");
+                check(draft.packs.equals(original) && (n == 1 ? restored.members.isEmpty() : restored.packageNames().equals(original))
+                                && restored.packageName.equals(original.get(0)),
+                        "Removing the added pack restores the previous packs");
+                if (n == 1) check(((android.widget.TextView) field(activity, "packInfo")).getVisibility() == android.view.View.GONE
                                 && ((android.view.ViewGroup) ((android.widget.LinearLayout) field(activity, "packList"))
                                 .getChildAt(0)).getChildAt(0).getVisibility() == android.view.View.GONE,
                         "A single pack shows no priority controls");
