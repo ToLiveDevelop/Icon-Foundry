@@ -1,0 +1,26 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'dev.iconmanager'
+    compileSdk 37
+
+    defaultConfig {
+        applicationId 'dev.iconmanager'
+        minSdk 35
+        targetSdk 37
+        versionCode 16
+        versionName '1.7.5'
+        testInstrumentationRunner 'dev.iconmanager.DeviceTests'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+}
