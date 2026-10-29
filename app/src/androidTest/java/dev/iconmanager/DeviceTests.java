@@ -198,6 +198,10 @@ public final class DeviceTests extends Instrumentation {
                 "Timestamp distinguishes consecutive exports without changing theme title");
         check(ThemeEngine.datedFilename("Моя тема", createdAt, 2).equals("Моя тема_2026-10-29_15-55-19_2.hnt"),
                 "Same-second filename collision receives numeric suffix");
+        check(ThemeEngine.versionedTitle("Premium Icons", 2).equals("Premium Icons v2")
+                        && ThemeEngine.versionedTitle("Т".repeat(100), 2).length() == 100
+                        && !Character.isHighSurrogate(ThemeEngine.versionedTitle("😀".repeat(50), 2).charAt(97)),
+                "Display title version suffix fits limit without splitting Unicode characters");
         for (String name : List.of(" .a/b:c*?\"<>|\n", "Т".repeat(100), "\uD83D\uDE00".repeat(50))) {
             String generated = ThemeEngine.datedFilename(name, createdAt);
             check(generated.length() <= 100 && generated.getBytes(StandardCharsets.UTF_8).length <= 255
@@ -762,6 +766,7 @@ public final class DeviceTests extends Instrumentation {
             for (int step = 0; step < 3; step++) {
                 int current = step;
                 String themeTitle = current == 2 ? "Template copy" : "Template integration";
+                String expectedTitle = current == 1 ? themeTitle + " v2" : themeTitle;
                 runOnMainSync(() -> {
                     ((android.widget.EditText) field(activity, "title")).setText(themeTitle);
                     ((android.widget.CheckBox) field(activity, "saveAsNew")).setChecked(current == 2);
@@ -778,8 +783,8 @@ public final class DeviceTests extends Instrumentation {
                 });
                 String filename = actualName[0];
                 filenames.add(filename);
-                check(filename.matches(themeTitle + "_\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2}(_\\d+)?\\.hnt"),
-                        "Real export automatically generates dated filename from unchanged theme title");
+                check(filename.matches(expectedTitle + "_\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2}(_\\d+)?\\.hnt"),
+                        "Real export automatically generates dated filename from unique display title");
                 check(ThemeEngine.findDocument(activity.getContentResolver(), tree, filename) != null,
                         "Template integration writes verified .hnt through real export button");
                 try (var input = activity.getContentResolver().openInputStream(
@@ -788,12 +793,20 @@ public final class DeviceTests extends Instrumentation {
                     boolean found = false;
                     for (ZipEntry entry; (entry = zip.getNextEntry()) != null;) {
                         if (entry.getName().equals("description.xml")) {
-                            verifyDescription(zip.readAllBytes(), themeTitle, ((IconRepository.Pack) field(activity, "pack")).label);
+                            verifyDescription(zip.readAllBytes(), expectedTitle, ((IconRepository.Pack) field(activity, "pack")).label);
                             found = true;
                             break;
                         }
                     }
-                    check(found, "Export contains theme metadata with untimestamped display title");
+                    check(found, "Export contains unique theme metadata with untimestamped display title");
+                }
+                if (current == 1) {
+                    runOnMainSync(() -> {
+                        android.app.AlertDialog dialog = (android.app.AlertDialog) field(activity, "exportDialog");
+                        String message = ((android.widget.TextView) dialog.findViewById(android.R.id.message)).getText().toString();
+                        check(message.contains(activity.getString(R.string.export_display_title, expectedTitle)),
+                                "Export result reports the automatically versioned theme title");
+                    });
                 }
                 List<TemplateStore.Entry> entries = store.list();
                 check(entries.size() == (step == 2 ? 2 : 1), "Automatic template save has expected create/update/copy semantics");

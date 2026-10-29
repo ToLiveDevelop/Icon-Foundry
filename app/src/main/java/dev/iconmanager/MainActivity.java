@@ -90,7 +90,7 @@ public final class MainActivity extends Activity {
     private boolean editing;
     private TemplateStore templates;
     private CheckBox saveAsNew;
-    private record SavedExport(ThemeEngine.Result theme, TemplateStore.Entry template) {}
+    private record SavedExport(ThemeEngine.Result theme, TemplateStore.Entry template, String title) {}
     private final java.util.Set<String> reportedImageErrors = new java.util.HashSet<>();
 
     @Override public void onCreate(Bundle savedInstanceState) {
@@ -955,7 +955,8 @@ public final class MainActivity extends Activity {
         IconRepository.Pack currentPack = pack;
         String coverPath = draft.coverPath;
         work(getString(R.string.saving_theme), () -> {
-            String outputName = ThemeEngine.availableDatedFilename(getContentResolver(), tree, themeTitle, createdAt);
+            String outputTitle = ThemeEngine.availableThemeTitle(getContentResolver(), tree, themeTitle);
+            String outputName = ThemeEngine.availableDatedFilename(getContentResolver(), tree, outputTitle, createdAt);
             apps = repository.apps();
             Bitmap cover;
             if (coverPath.isEmpty()) cover = ThemeEngine.cover(currentPack, apps, overrides);
@@ -964,7 +965,7 @@ public final class MainActivity extends Activity {
                 if (cover == null) throw new IOException("Обложка не читается. Выберите её заново.");
             }
             try {
-                ThemeEngine.Result result = ThemeEngine.export(this, themeTitle, outputName, fullPack, shape, clearFolderBackground, currentPack, apps, overrides,
+                ThemeEngine.Result result = ThemeEngine.export(this, outputTitle, outputName, fullPack, shape, clearFolderBackground, currentPack, apps, overrides,
                         cover, tree, null, snapshot.wallpaperPath.isEmpty() ? null
                                 : new File(getFilesDir(), snapshot.wallpaperPath), (done, total) -> {
                             if (done == 1 || done == total || done % 10 == 0) runOnUiThread(() -> {
@@ -976,7 +977,7 @@ public final class MainActivity extends Activity {
                             });
                         });
                 try {
-                    return new SavedExport(result, templates.save(snapshot, currentPack.label, asNew));
+                    return new SavedExport(result, templates.save(snapshot, currentPack.label, asNew), outputTitle);
                 } catch (Exception error) {
                     throw new IOException("Тема сохранена в Honor/Themes/" + outputName
                             + ", но шаблон сохранить не удалось. Черновик сохранён; повторите экспорт.\n" + error.getMessage(), error);
@@ -992,6 +993,7 @@ public final class MainActivity extends Activity {
             AlertDialog dialog = showExportResult(saved.theme());
             dialog.setMessage(getString(saved.theme().clearFolderBackground() ? R.string.export_done_full_theme
                     : R.string.export_done, "Honor/Themes/" + saved.theme().filename())
+                    + "\n\n" + getString(R.string.export_display_title, saved.title())
                     + "\n\n" + getString(R.string.template_saved, saved.template().name()));
         });
     }

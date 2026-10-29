@@ -18,7 +18,8 @@
     <string name="icon_source">Иконпак: %1$s · выбрать другой</string>
     <string name="title_hint">Название темы</string>
     <string name="theme_title">Название темы</string>
-    <string name="filename_help">Имя .hnt создаётся из названия, даты и времени.</string>
+    <string name="filename_help">Имя .hnt создаётся автоматически. Если такое название уже есть среди тем Icon Foundry, добавится номер версии.</string>
+    <string name="export_display_title">Название темы: %1$s</string>
     <string name="cover">Обложка</string>
     <string name="wallpaper">Обои</string>
     <string name="choose_wallpaper">Выбрать обои</string>

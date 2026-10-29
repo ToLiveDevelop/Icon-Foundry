@@ -29,8 +29,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.HashSet;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
+import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
 final class ThemeEngine {
@@ -206,6 +209,88 @@ final class ThemeEngine {
             if (!exists(resolver, tree, name)) return name;
         }
         throw new IOException("Не удалось подобрать свободное имя файла темы.");
+    }
+
+    static String availableThemeTitle(ContentResolver resolver, Uri tree, String title) throws IOException {
+        Set<String> existing = existingFoundryTitles(resolver, tree);
+        if (!existing.contains(title.toLowerCase(Locale.ROOT))) return title;
+        for (int version = 2; version <= 9999; version++) {
+            String candidate = versionedTitle(title, version);
+            if (!existing.contains(candidate.toLowerCase(Locale.ROOT))) return candidate;
+        }
+        throw new IOException("Не удалось подобрать свободное название темы.");
+    }
+
+    static String versionedTitle(String title, int version) {
+        if (version < 2) throw new IllegalArgumentException("version");
+        String suffix = " v" + version;
+        int limit = 100 - suffix.length();
+        int end = Math.min(title.length(), limit);
+        if (end > 0 && end < title.length() && Character.isHighSurrogate(title.charAt(end - 1))) end--;
+        return title.substring(0, end) + suffix;
+    }
+
+    private static Set<String> existingFoundryTitles(ContentResolver resolver, Uri tree) throws IOException {
+        Set<String> titles = new HashSet<>();
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree));
+        try (Cursor cursor = resolver.query(children,
+                new String[]{DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_DOCUMENT_ID},
+                null, null, null)) {
+            if (cursor == null) throw new IOException("Не удалось прочитать каталог экспорта.");
+            while (cursor.moveToNext()) {
+                String name = cursor.getString(0);
+                if (name == null || !name.toLowerCase(Locale.ROOT).endsWith(".hnt")) continue;
+                Uri document = DocumentsContract.buildDocumentUriUsingTree(tree, cursor.getString(1));
+                try {
+                    String[] metadata = readThemeIdentity(resolver, document);
+                    if (metadata != null && "Icon Foundry by ToLive".equalsIgnoreCase(metadata[1])) {
+                        titles.add(metadata[0].toLowerCase(Locale.ROOT));
+                    }
+                } catch (IOException error) {
+                    android.util.Log.w("IconManager", "Не удалось прочитать метаданные темы " + name, error);
+                }
+            }
+        }
+        return titles;
+    }
+
+    private static String[] readThemeIdentity(ContentResolver resolver, Uri document) throws IOException {
+        try (InputStream input = require(resolver.openInputStream(document));
+             ZipInputStream zip = new ZipInputStream(input)) {
+            for (ZipEntry entry; (entry = zip.getNextEntry()) != null;) {
+                if (!"description.xml".equals(entry.getName())) {
+                    zip.closeEntry();
+                    continue;
+                }
+                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                copyLimited(zip, bytes, 1024 * 1024);
+                XmlPullParser parser = Xml.newPullParser();
+                parser.setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, false);
+                parser.setInput(new java.io.ByteArrayInputStream(bytes.toByteArray()), "UTF-8");
+                String title = null;
+                String designer = null;
+                boolean root = false;
+                for (int event = parser.nextToken(); event != XmlPullParser.END_DOCUMENT;
+                     event = parser.nextToken()) {
+                    if (event == XmlPullParser.DOCDECL) throw new IOException("Недопустимый XML темы.");
+                    if (event == XmlPullParser.START_TAG) {
+                        String tag = parser.getName();
+                        if (!root) {
+                            if (!"HnTheme".equals(tag)) throw new IOException("Неизвестный формат метаданных темы.");
+                            root = true;
+                        }
+                        if ("title".equals(tag)) title = parser.nextText().trim();
+                        else if ("designer".equals(tag)) designer = parser.nextText().trim();
+                    }
+                }
+                if (!root || title == null || title.isEmpty() || designer == null) return null;
+                return new String[]{title, designer};
+            }
+        } catch (Exception error) {
+            if (error instanceof IOException io) throw io;
+            throw new IOException("Не удалось прочитать метаданные темы.", error);
+        }
+        return null;
     }
 
     static boolean exists(ContentResolver resolver, Uri tree, String filename) throws IOException {
