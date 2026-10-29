@@ -92,8 +92,10 @@ public final class DeviceTests extends Instrumentation {
         check(pack.mappings.size() >= 4000, "Component mappings loaded from real appfilter");
         List<IconRepository.App> apps = repository.apps();
         Draft currentDraft = Draft.load(context);
-        if (!currentDraft.pack.isEmpty() && !currentDraft.pack.equals(pack.packageName)) {
-            IconRepository.Pack current = repository.load(currentDraft.pack);
+        if (!currentDraft.packs.isEmpty() && !currentDraft.packs.equals(List.of(pack.packageName))) {
+            List<IconRepository.Pack> currentPacks = new ArrayList<>();
+            for (String name : currentDraft.packs) currentPacks.add(repository.load(name));
+            IconRepository.Pack current = IconRepository.combine(currentPacks);
             List<String> currentCover = ThemeEngine.coverIcons(current, apps, currentDraft.overrides);
             check(currentCover.size() == 12 && currentCover.stream().map(IconRepository::resourceName).distinct().count() == 12,
                     "Current user pack generates twelve distinct cover icons");
@@ -183,6 +185,7 @@ public final class DeviceTests extends Instrumentation {
                     && contactsIcon.equals(targets.get("com.hihonor.contacts")), "Contacts/Dialer separated in both scopes");
         }
         check(IconRepository.component("ComponentInfo{dev.example/.Main}").getClassName().equals("dev.example.Main"), "Relative component normalization");
+        verifyMultiPack(pack);
         check(IconRepository.component(":BROWSER") == null, "Category aliases are not package names");
         check(IconRepository.component("ComponentInfo{../../escape/.Main}") == null, "Unsafe target rejected");
         check(ThemeEngine.filename("MyTheme").equals("MyTheme.hnt"), "Filename extension");
@@ -395,7 +398,7 @@ public final class DeviceTests extends Instrumentation {
             finally { rendered.recycle(); }
             IconRepository.App app = new IconRepository.App(new ComponentName("dev.test.file", "dev.test.file.Main"), "Test");
             Draft draft = new Draft();
-            draft.pack = pack.packageName;
+            draft.packs.add(pack.packageName);
             draft.overrides.put(app.key(), reference);
             TemplateStore store = new TemplateStore(isolated);
             TemplateStore.Entry saved = store.save(draft, pack.label, false);
@@ -545,7 +548,7 @@ public final class DeviceTests extends Instrumentation {
                 check(walls == 2, "Actual SAF export includes home and lock wallpaper");
             }
             Draft draft = new Draft();
-            draft.pack = pack.packageName;
+            draft.packs.add(pack.packageName);
             draft.wallpaperPath = image.getName();
             TemplateStore store = new TemplateStore(isolated);
             TemplateStore.Entry saved = store.save(draft, pack.label, false);
@@ -698,8 +701,10 @@ public final class DeviceTests extends Instrumentation {
                 }
                 check(findText(activity.getWindow().getDecorView(), "Выбрать образец .hnt") == null,
                         "Sample selection removed from real screen");
-                android.widget.Button choose = (android.widget.Button) findText(
-                        activity.getWindow().getDecorView(), context.getString(R.string.choose_pack));
+                android.widget.Button choose = (android.widget.Button) field(activity, "addPackButton");
+                check(choose.getText().toString().equals(context.getString(
+                        ((Draft) field(activity, "draft")).packs.isEmpty() ? R.string.choose_pack : R.string.add_pack)),
+                        "Pack button says choose for the first pack and add for further packs");
                 choose.performClick();
                 android.app.Dialog dialog = (android.app.Dialog) field(activity, "packDialog");
                 check(dialog != null && dialog.isShowing(), "Pack picker opens synchronously before discovery completes");
@@ -728,6 +733,7 @@ public final class DeviceTests extends Instrumentation {
                 check(!(boolean) field(activity, "busy"), "Pack discovery finishes before picker is used");
             });
             verifyOperationUi((MainActivity) activity);
+            verifyMultiPackUi((MainActivity) activity, pack);
             verifyThemeEditing((MainActivity) activity, pack);
             verifyWallpaperUi((MainActivity) activity);
             verifyFileIconUi((MainActivity) activity, pack);
@@ -1050,7 +1056,7 @@ public final class DeviceTests extends Instrumentation {
                 }
                 byte[] coverBytes = Files.readAllBytes(coverFile.toPath());
                 Draft settings = new Draft();
-                settings.pack = pack.packageName;
+                settings.packs.add(pack.packageName);
                 settings.title = "My mixed theme";
                 settings.tree = "content://test/tree";
                 settings.shape = IconShape.SQUIRCLE;
@@ -1069,7 +1075,7 @@ public final class DeviceTests extends Instrumentation {
                 Files.write(coverFile.toPath(), new byte[]{1, 2, 3});
                 Draft restored = store.open(first.id());
                 check(restored.title.equals("My mixed theme") && !restored.toJson().has("filename")
-                        && restored.pack.equals(pack.packageName) && restored.tree.equals("content://test/tree")
+                        && restored.packs.equals(List.of(pack.packageName)) && restored.tree.equals("content://test/tree")
                         && restored.shape == IconShape.SQUIRCLE && restored.fullPack && !restored.clearFolderBackground,
                         "All main template settings round-trip independently from the editing draft");
                 check(restored.overrides.equals(settings.overrides), "Template restores external references and system exclusions");
@@ -1452,6 +1458,169 @@ public final class DeviceTests extends Instrumentation {
         }
     }
 
+    private IconRepository.Pack syntheticPack(IconRepository.Pack real, String packageName, String label) {
+        IconRepository.Pack result = new IconRepository.Pack(packageName, label, real.resources, real.badge, real.manager);
+        result.fileIcons = real.fileIcons;
+        return result;
+    }
+
+    private void syntheticMapping(IconRepository.Pack target, IconRepository.Pack real, String component, String icon) {
+        ComponentName name = ComponentName.unflattenFromString(component);
+        target.icons.put(icon, real.icons.get(icon));
+        target.mappings.put(name.flattenToString(), icon);
+        target.byPackage.putIfAbsent(name.getPackageName(), icon);
+    }
+
+    private void verifyMultiPack(IconRepository.Pack real) throws Exception {
+        List<String> names = real.icons.keySet().stream().sorted().limit(200).toList();
+        IconRepository.Pack one = syntheticPack(real, "dev.pack.one", "One");
+        IconRepository.Pack two = syntheticPack(real, "dev.pack.two", "Two");
+        IconRepository.Pack five = syntheticPack(real, "dev.pack.five", "Five");
+        syntheticMapping(one, real, "dev.app.a/dev.app.a.Main", names.get(0));
+        syntheticMapping(two, real, "dev.app.a/dev.app.a.Main", names.get(1));
+        syntheticMapping(two, real, "dev.app.c/dev.app.c.Main", names.get(2));
+        syntheticMapping(five, real, "dev.app.a/dev.app.a.Main", names.get(3));
+        syntheticMapping(five, real, "dev.app.b/dev.app.b.Main", names.get(4));
+        syntheticMapping(five, real, "dev.app.c/dev.app.c.Main", names.get(5));
+        IconRepository.App a = new IconRepository.App(new ComponentName("dev.app.a", "dev.app.a.Main"), "A");
+        IconRepository.App b = new IconRepository.App(new ComponentName("dev.app.b", "dev.app.b.Main"), "B");
+        IconRepository.App c = new IconRepository.App(new ComponentName("dev.app.c", "dev.app.c.Main"), "C");
+        IconRepository.App none = new IconRepository.App(new ComponentName("dev.app.none", "dev.app.none.Main"), "None");
+        check(IconRepository.combine(List.of(real)) == real, "Single base pack is used unchanged");
+        check(IconRepository.combine(List.of()) == null, "No base packs produce no combined pack");
+        IconRepository.Pack combined = IconRepository.combine(List.of(one, two, five));
+        check(("dev.pack.one:" + names.get(0)).equals(combined.automatic(a)), "App present in packs 1, 2 and 5 uses pack 1");
+        check(("dev.pack.five:" + names.get(4)).equals(combined.automatic(b)), "App missing from higher packs falls back to pack 5");
+        check(("dev.pack.two:" + names.get(2)).equals(combined.automatic(c)), "App present in packs 2 and 5 uses pack 2");
+        check(combined.automatic(none) == null, "App absent from every pack stays unthemed");
+        check(combined.labels().equals(List.of("One", "Two", "Five"))
+                        && combined.packageNames().equals(List.of("dev.pack.one", "dev.pack.two", "dev.pack.five")),
+                "Combined pack keeps priority order");
+        Map<String, String> installed = ThemeEngine.exportTargets(List.of(a, b, c, none), combined, Map.of(), false);
+        check(installed.equals(Map.of("dev.app.a", "dev.pack.one:" + names.get(0), "dev.app.b", "dev.pack.five:" + names.get(4),
+                "dev.app.c", "dev.pack.two:" + names.get(2))), "Installed-only export resolves each app by pack priority");
+        Map<String, String> manual = Map.of(a.key(), "dev.pack.five:" + names.get(3));
+        check(("dev.pack.five:" + names.get(3)).equals(combined.selected(a, manual)), "Manual choice overrides pack priority");
+        Bitmap expected = real.render(names.get(4), 64), actual = combined.render(combined.automatic(b), 64);
+        try { check(expected.sameAs(actual), "Combined pack renders icons from their source pack"); }
+        finally { expected.recycle(); actual.recycle(); }
+        IconRepository.Pack first = syntheticPack(real, "dev.pack.first", "First");
+        IconRepository.Pack disjoint = syntheticPack(real, "dev.pack.disjoint", "Disjoint");
+        IconRepository.Pack same = syntheticPack(real, "dev.pack.same", "Same");
+        for (int i = 0; i < 100; i++) {
+            syntheticMapping(first, real, "dev.shared.app" + i + "/.Main", names.get(i));
+            syntheticMapping(disjoint, real, "dev.other.app" + i + "/.Main", names.get(100 + i));
+            syntheticMapping(same, real, "dev.shared.app" + i + "/.Main", names.get(100 + i));
+        }
+        IconRepository.Pack union = IconRepository.combine(List.of(first, disjoint));
+        check(ThemeEngine.exportCount(List.of(), union, Map.of(), true) == 200
+                        && ThemeEngine.exportTargets(List.of(), union, Map.of(), true).size() == 200,
+                "Whole-pack export of two disjoint 100-icon packs contains 200 icons");
+        IconRepository.Pack overlap = IconRepository.combine(List.of(first, same));
+        Map<String, String> overlapTargets = ThemeEngine.exportTargets(List.of(), overlap, Map.of(), true);
+        check(ThemeEngine.exportCount(List.of(), overlap, Map.of(), true) == 100 && overlapTargets.size() == 100
+                        && overlapTargets.values().stream().allMatch(value -> value.startsWith("dev.pack.first:")),
+                "Whole-pack export of identical packs keeps only 100 icons from the first pack");
+        Map<String, String> reversed = ThemeEngine.exportTargets(List.of(), IconRepository.combine(List.of(same, first)), Map.of(), true);
+        check(reversed.size() == 100 && reversed.values().stream().allMatch(value -> value.startsWith("dev.pack.same:")),
+                "Reordering packs changes which duplicate wins");
+        check(ThemeEngine.credits(List.of("A")).equals("На основе иконпака «A». Права на иконки принадлежат разработчику иконпака. "
+                        + "Только для персонального использования.")
+                        && ThemeEngine.credits(List.of("A", "B")).equals("На основе иконпаков «A», «B». Права на иконки "
+                        + "принадлежат разработчикам иконпаков. Только для персонального использования."),
+                "Theme description credits every base pack");
+        Draft draft = new Draft();
+        draft.packs.addAll(List.of("dev.pack.two", "dev.pack.one"));
+        org.json.JSONObject json = draft.toJson();
+        check(json.getString("pack").equals("dev.pack.two") && json.getJSONArray("packs").length() == 2
+                        && Draft.fromJson(json).packs.equals(List.of("dev.pack.two", "dev.pack.one")),
+                "Draft persists pack priority order");
+        draft.packs.remove(1);
+        check(!draft.toJson().has("packs") && Draft.fromJson(draft.toJson()).packs.equals(List.of("dev.pack.two")),
+                "Single-pack drafts keep the previous template format");
+        check(Draft.fromJson(new org.json.JSONObject().put("pack", "legacy.pack")).packs.equals(List.of("legacy.pack")),
+                "Legacy single-pack templates migrate to the packs list");
+        check(Draft.fromJson(new org.json.JSONObject().put("packs", new org.json.JSONArray().put("x.a").put("x.b").put("x.a")))
+                .packs.equals(List.of("x.a", "x.b")), "Duplicate base packs are ignored");
+        org.json.JSONArray tooMany = new org.json.JSONArray();
+        for (int i = 0; i <= IconRepository.MAX_PACKS; i++) tooMany.put("dev.pack.n" + i);
+        boolean rejected = false;
+        try { Draft.fromJson(new org.json.JSONObject().put("packs", tooMany)); }
+        catch (org.json.JSONException error) { rejected = true; }
+        check(rejected, "No more than ten base packs are accepted");
+    }
+
+    private void onMain(Runnable action) {
+        Throwable[] failure = new Throwable[1];
+        runOnMainSync(() -> {
+            try { action.run(); } catch (Throwable error) { failure[0] = error; }
+        });
+        if (failure[0] instanceof RuntimeException runtime) throw runtime;
+        if (failure[0] instanceof Error error) throw error;
+        if (failure[0] != null) throw new AssertionError(failure[0]);
+    }
+
+    private void verifyMultiPackUi(MainActivity activity, IconRepository.Pack pack) throws Exception {
+        IconRepository.Pack other = syntheticPack(pack, "dev.pack.second", "Second");
+        syntheticMapping(other, pack, "dev.app.second/.Main", pack.icons.keySet().iterator().next());
+        Draft draft = (Draft) field(activity, "draft");
+        List<String> original = List.copyOf(draft.packs);
+        try {
+            onMain(() -> {
+                check(original.equals(List.of(pack.packageName)), "Editor starts with the real base pack");
+                activity.selectPack(other);
+                android.widget.LinearLayout list = (android.widget.LinearLayout) field(activity, "packList");
+                check(draft.packs.equals(List.of(pack.packageName, "dev.pack.second")) && list.getChildCount() == 2,
+                        "Second pack is appended with lower priority");
+                IconRepository.Pack combined = (IconRepository.Pack) field(activity, "pack");
+                check(combined.packageNames().equals(draft.packs), "Editor uses the combined pack in list order");
+                check(((android.view.ViewGroup) list.getChildAt(0)).getChildAt(0).getVisibility() == android.view.View.VISIBLE,
+                        "Drag handles appear for several packs");
+                check(((android.widget.TextView) field(activity, "packInfo")).getText().toString()
+                        .equals(activity.getString(R.string.pack_priority_help)), "Priority rule is explained");
+                activity.selectPack(other);
+                check(draft.packs.size() == 2, "The same pack cannot be added twice");
+            });
+            waitForIdleSync();
+            onMain(() -> {
+                android.widget.LinearLayout list = (android.widget.LinearLayout) field(activity, "packList");
+                android.view.View row = list.getChildAt(1);
+                android.view.View handle = ((android.view.ViewGroup) row).getChildAt(0);
+                float distance = row.getTop() - list.getChildAt(0).getTop();
+                check(distance > 0, "Pack rows are laid out before dragging");
+                long time = android.os.SystemClock.uptimeMillis();
+                for (int[] step : new int[][]{{android.view.MotionEvent.ACTION_DOWN, 0},
+                        {android.view.MotionEvent.ACTION_MOVE, -1}, {android.view.MotionEvent.ACTION_UP, -1}}) {
+                    android.view.MotionEvent event = android.view.MotionEvent.obtain(time, time, step[0], 10, 200 + step[1] * distance * 0.75f, 0);
+                    handle.dispatchTouchEvent(event);
+                    event.recycle();
+                }
+                check(draft.packs.equals(List.of("dev.pack.second", pack.packageName)), "Dragging a pack up raises its priority");
+                android.widget.LinearLayout moved = (android.widget.LinearLayout) field(activity, "packList");
+                check(moved.getChildAt(0).performAccessibilityAction(R.id.pack_move_down, null)
+                                && draft.packs.equals(List.of(pack.packageName, "dev.pack.second")),
+                        "Priority can also be changed with accessibility actions");
+                try {
+                    check(Draft.load(activity).packs.equals(draft.packs), "Pack order is saved in the draft");
+                } catch (org.json.JSONException error) { throw new AssertionError(error); }
+                ((android.widget.Button) ((android.view.ViewGroup) moved.getChildAt(1)).getChildAt(3)).performClick();
+                check(draft.packs.equals(List.of(pack.packageName)) && ((IconRepository.Pack) field(activity, "pack")).members.isEmpty()
+                                && ((IconRepository.Pack) field(activity, "pack")).packageName.equals(pack.packageName),
+                        "Removing the second pack restores the original single-pack behaviour");
+                check(((android.widget.TextView) field(activity, "packInfo")).getVisibility() == android.view.View.GONE
+                                && ((android.view.ViewGroup) ((android.widget.LinearLayout) field(activity, "packList"))
+                                .getChildAt(0)).getChildAt(0).getVisibility() == android.view.View.GONE,
+                        "A single pack shows no priority controls");
+            });
+        } finally {
+            onMain(() -> {
+                for (int i = draft.packs.size() - 1; i >= 0; i--) if (!original.contains(draft.packs.get(i))) activity.removePack(i);
+                try { activity.getSharedPreferences("draft", 0).edit().putString("json", draft.toJson().toString()).commit(); }
+                catch (org.json.JSONException error) { throw new AssertionError(error); }
+            });
+        }
+    }
+
     private void verifyThemeEditing(MainActivity activity, IconRepository.Pack pack) throws Exception {
         runOnMainSync(() -> {
             android.widget.EditText title = (android.widget.EditText) field(activity, "title");
@@ -1511,7 +1680,7 @@ public final class DeviceTests extends Instrumentation {
                                         .contentEquals(((android.widget.TextView) identity.getChildAt(2)).getText()),
                         "Filename input replaced by concise automatic naming hint");
                 android.widget.LinearLayout body = (android.widget.LinearLayout) title.getParent().getParent();
-                check(findText(body.getChildAt(2), activity.getString(R.string.choose_pack)) != null,
+                check(findText(body.getChildAt(2), activity.getString(R.string.add_pack)) != null,
                         "Pack selection is the first form card");
             } finally { title.setText(savedTitle); }
         });

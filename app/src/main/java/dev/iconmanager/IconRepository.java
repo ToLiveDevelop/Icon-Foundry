@@ -43,6 +43,7 @@ final class IconRepository {
         final Map<String, String> byPackage = new LinkedHashMap<>();
         final Map<String, Icon> icons = new LinkedHashMap<>();
         final Set<String> unavailable = new LinkedHashSet<>();
+        final List<Pack> members = new ArrayList<>();
         private Integer fallbackSize;
         java.io.File fileIcons;
 
@@ -54,7 +55,23 @@ final class IconRepository {
             this.manager = manager;
         }
 
+        List<String> labels() {
+            return members.isEmpty() ? List.of(label) : members.stream().map(member -> member.label).toList();
+        }
+
+        List<String> packageNames() {
+            return members.isEmpty() ? List.of(packageName) : members.stream().map(member -> member.packageName).toList();
+        }
+
         String automatic(App app) {
+            if (!members.isEmpty()) {
+                // Priority is per application: the first pack that themes it wins as a whole.
+                for (Pack member : members) {
+                    String name = member.automatic(app);
+                    if (name != null && safeName(name)) return reference(member.packageName, name);
+                }
+                return null;
+            }
             String name = null;
             // HONOR retained Android's Contacts activities, but some packs mislabel their OEM entries.
             if (isLegacyContacts(app.component)) {
@@ -116,6 +133,13 @@ final class IconRepository {
 
         Bitmap render(String name, int size) throws IOException {
             if (FileIcons.isFile(name)) return FileIcons.render(fileIcons, name, size);
+            if (!members.isEmpty()) {
+                String owner = sourcePackage(name, packageName);
+                for (Pack member : members) {
+                    if (member.packageName.equals(owner)) return member.render(resourceName(name), size);
+                }
+                return members.get(0).render(name, size);
+            }
             String source = sourcePackage(name, packageName);
             String resource = resourceName(name);
             Resources sourceResources = resources;
@@ -152,6 +176,33 @@ final class IconRepository {
             drawable.draw(new Canvas(bitmap));
             return bitmap;
         }
+    }
+
+    static final int MAX_PACKS = 10;
+
+    /** Merges packs by priority; a single pack is returned unchanged. */
+    static Pack combine(List<Pack> packs) {
+        if (packs.isEmpty()) return null;
+        if (packs.size() == 1) return packs.get(0);
+        if (packs.size() > MAX_PACKS) throw new IllegalArgumentException("Не более " + MAX_PACKS + " иконпаков.");
+        Pack first = packs.get(0);
+        Pack combined = new Pack(first.packageName, String.join(" + ", packs.stream().map(pack -> pack.label).toList()),
+                first.resources, first.badge, first.manager);
+        combined.fileIcons = first.fileIcons;
+        combined.members.addAll(packs);
+        for (Pack member : packs) {
+            for (var entry : member.mappings.entrySet()) if (safeName(entry.getValue())) {
+                combined.mappings.putIfAbsent(entry.getKey(), reference(member.packageName, entry.getValue()));
+            }
+            for (var entry : member.byPackage.entrySet()) if (safeName(entry.getValue())) {
+                combined.byPackage.putIfAbsent(entry.getKey(), reference(member.packageName, entry.getValue()));
+            }
+            for (Icon icon : member.icons.values()) if (safeName(icon.name())) {
+                String name = reference(member.packageName, icon.name());
+                combined.icons.put(name, new Icon(name, icon.category(), icon.id()));
+            }
+        }
+        return combined;
     }
 
     private final PackageManager pm;

@@ -448,7 +448,7 @@ final class ThemeEngine {
             }
             try (ZipOutputStream zip = new ZipOutputStream(new FileOutputStream(result))) {
                 put(zip, "preview/", new byte[0]);
-                put(zip, "description.xml", description(title, pack.label));
+                put(zip, "description.xml", description(title, pack.labels()));
                 if (clearFolderBackground) put(zip, LAUNCHER, folderColors());
                 if (wallpaperBytes != null) {
                     put(zip, "wallpaper/", new byte[0]);
@@ -577,7 +577,16 @@ final class ThemeEngine {
         }
     }
 
-    private static byte[] description(String title, String pack) throws IOException {
+    static String credits(List<String> packs) {
+        String names = String.join(", ", packs.stream().map(label -> "«" + label + "»").toList());
+        return packs.size() == 1
+                ? "На основе иконпака " + names + ". Права на иконки принадлежат разработчику иконпака. "
+                        + "Только для персонального использования."
+                : "На основе иконпаков " + names + ". Права на иконки принадлежат разработчикам иконпаков. "
+                        + "Только для персонального использования.";
+    }
+
+    private static byte[] description(String title, List<String> packs) throws IOException {
         StringWriter writer = new StringWriter();
         XmlSerializer xml = Xml.newSerializer();
         xml.setOutput(writer);
@@ -585,8 +594,7 @@ final class ThemeEngine {
         xml.startTag(null, "HnTheme");
         String[][] fields = {{"title", title}, {"title-cn", title}, {"author", "Icon Foundry by ToLive"},
                 {"designer", "Icon Foundry by ToLive"}, {"version", "12"}, {"font", "Default"}, {"font-cn", "Default"},
-                {"briefInfo", "На основе иконпака «" + pack + "». Права на иконки принадлежат разработчику иконпака. "
-                        + "Только для персонального использования."}};
+                {"briefInfo", credits(packs)}};
         for (String[] field : fields) xml.startTag(null, field[0]).text(field[1]).endTag(null, field[0]);
         xml.endTag(null, "HnTheme").endDocument();
         return writer.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
@@ -654,10 +662,12 @@ final class ThemeEngine {
             if (selected != null && !excluded.contains(IconRepository.resourceName(selected))
                     && used.add(IconRepository.resourceName(selected))) result.add(selected);
         }
-        for (String name : pack.icons.keySet().stream().sorted(String.CASE_INSENSITIVE_ORDER
+        for (String name : pack.icons.keySet().stream().sorted(java.util.Comparator.comparing(
+                IconRepository::resourceName, String.CASE_INSENSITIVE_ORDER)
                 .thenComparing(java.util.Comparator.naturalOrder())).toList()) {
             if (result.size() == 12) break;
-            if (!excluded.contains(name) && used.add(name)) result.add(name);
+            String resource = IconRepository.resourceName(name);
+            if (!excluded.contains(resource) && used.add(resource)) result.add(name);
         }
         return result;
     }
@@ -679,7 +689,8 @@ final class ThemeEngine {
         canvas.drawText("ICON FOUNDRY", 50, 130, paint);
         paint.setColor(Color.WHITE);
         paint.setTextSize(28);
-        canvas.drawText("HONOR / " + pack.label, 50, 190, paint);
+        canvas.drawText(android.text.TextUtils.ellipsize("HONOR / " + pack.label, new android.text.TextPaint(paint),
+                620, android.text.TextUtils.TruncateAt.END).toString(), 50, 190, paint);
         int index = 0;
         try {
             for (String selected : coverIcons(pack, apps, overrides)) {

@@ -1,14 +1,18 @@
 package dev.iconmanager;
 
 import android.content.Context;
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 final class Draft {
     String title = "";
-    String pack = "";
+    /** Base packs in priority order; the first one wins. */
+    final List<String> packs = new ArrayList<>();
     String tree = "";
     String coverPath = "";
     String wallpaperPath = "";
@@ -28,7 +32,9 @@ final class Draft {
     static Draft fromJson(JSONObject j) throws JSONException {
         Draft d = new Draft();
         d.title = j.optString("title");
-        d.pack = j.optString("pack");
+        JSONArray packs = j.optJSONArray("packs");
+        if (packs != null) for (int i = 0; i < packs.length(); i++) d.addPack(packs.getString(i));
+        else if (!j.optString("pack").isEmpty()) d.addPack(j.optString("pack"));
         d.tree = j.optString("tree");
         d.coverPath = j.optString("coverPath");
         d.wallpaperPath = j.optString("wallpaperPath");
@@ -45,8 +51,8 @@ final class Draft {
             for (var keys = overrides.keys(); keys.hasNext();) {
                 String key = keys.next();
                 String value = overrides.getString(key);
-                if (!value.isEmpty() && !d.pack.isEmpty() && !value.contains(":")) {
-                    value = IconRepository.reference(d.pack, value);
+                if (!value.isEmpty() && !d.packs.isEmpty() && !value.contains(":")) {
+                                    value = IconRepository.reference(d.primaryPack(), value);
                 }
                 d.overrides.put(key, value);
             }
@@ -63,7 +69,7 @@ final class Draft {
     }
 
     boolean hasUnsavedChanges(Context context) {
-        if (pack.isEmpty() && title.isEmpty() && overrides.isEmpty() && coverPath.isEmpty() && wallpaperPath.isEmpty()) {
+        if (packs.isEmpty() && title.isEmpty() && overrides.isEmpty() && coverPath.isEmpty() && wallpaperPath.isEmpty()) {
             return false;
         }
         if (templateId.isEmpty()) return true;
@@ -92,7 +98,7 @@ final class Draft {
 
     JSONObject toJson() throws JSONException {
         JSONObject j = new JSONObject();
-        j.put("title", title).put("pack", pack).put("tree", tree)
+        j.put("title", title).put("pack", primaryPack()).put("tree", tree)
                 .put("coverPath", coverPath)
                 .put("wallpaperPath", wallpaperPath)
                 .put("templateId", templateId)
@@ -100,6 +106,19 @@ final class Draft {
                 .put("clearFolderBackground", clearFolderBackground)
                 .put("shape", shape.name())
                 .put("overrides", new JSONObject(overrides));
+        // A single pack keeps the original format, so older templates and fingerprints stay identical.
+        if (packs.size() > 1) j.put("packs", new JSONArray(packs));
         return j;
+    }
+
+    String primaryPack() { return packs.isEmpty() ? "" : packs.get(0); }
+
+    private void addPack(String packageName) throws JSONException {
+        if (!IconRepository.safeName(packageName)) throw new JSONException("Некорректный иконпак: " + packageName);
+        if (packs.contains(packageName)) return;
+        if (packs.size() == IconRepository.MAX_PACKS) {
+            throw new JSONException("Не более " + IconRepository.MAX_PACKS + " иконпаков.");
+        }
+        packs.add(packageName);
     }
 }

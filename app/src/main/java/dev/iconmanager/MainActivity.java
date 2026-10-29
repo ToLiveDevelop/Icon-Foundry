@@ -22,6 +22,7 @@ import android.text.TextWatcher;
 import android.util.Log;
 import android.util.LruCache;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
@@ -68,12 +69,15 @@ public final class MainActivity extends Activity {
     private Draft draft;
     private IconRepository repository;
     private IconRepository.Pack pack;
+    private final List<IconRepository.Pack> packs = new ArrayList<>();
+    private LinearLayout packList;
+    private Button addPackButton;
     private List<IconRepository.App> apps = List.of();
     private LinearLayout root;
     private EditText title;
     private Button exportButton;
     private TextView packInfo, appInfo, destinationInfo, status, templateHelp;
-    private ImageView coverPreview, packPreview, wallpaperPreview;
+    private ImageView coverPreview, wallpaperPreview;
     private Button removeWallpaper;
     private Dialog packDialog;
     private Dialog cropDialog;
@@ -113,12 +117,25 @@ public final class MainActivity extends Activity {
     void openEditor() {
         editing = true;
         pack = null;
+        packs.clear();
         images.evictAll();
         buildScreen();
+        List<String> selected = List.copyOf(draft.packs);
+        List<String> missing = new ArrayList<>();
         work(getString(R.string.loading_template), () -> {
             apps = repository.apps();
-            return draft.pack.isEmpty() ? null : repository.load(draft.pack);
-        }, loaded -> { pack = loaded; refresh(); });
+            List<IconRepository.Pack> loaded = new ArrayList<>();
+            android.content.pm.PackageManager.NameNotFoundException absent = null;
+            for (String packageName : selected) {
+                try { loaded.add(repository.load(packageName)); }
+                catch (android.content.pm.PackageManager.NameNotFoundException error) { missing.add(packageName); absent = error; }
+            }
+            if (loaded.isEmpty() && absent != null) throw absent;
+            return loaded;
+        }, loaded -> {
+            packs.addAll(loaded); pack = IconRepository.combine(packs); refresh();
+            if (!missing.isEmpty()) showError(new IOException(getString(R.string.packs_missing, String.join(", ", missing))));
+        });
     }
 
     private void prepareScreen() {
@@ -278,15 +295,13 @@ public final class MainActivity extends Activity {
         body.addView(text(getString(R.string.tagline), 28, Color.WHITE));
         body.addView(text(getString(R.string.intro), 14, MUTED));
         LinearLayout packCard = card(body, R.string.pack);
-        packCard.addView(button(R.string.choose_pack, view -> choosePack()));
-        LinearLayout selectedPack = row();
-        packPreview = new ImageView(this);
-        packPreview.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        selectedPack.addView(packPreview, new LinearLayout.LayoutParams(dp(48), dp(48)));
-        packInfo = text("", 15, ACCENT);
-        packInfo.setPadding(dp(12), dp(6), 0, dp(6));
-        selectedPack.addView(packInfo, new LinearLayout.LayoutParams(0, -2, 1));
-        packCard.addView(selectedPack);
+        packList = column();
+        packCard.addView(packList);
+        packInfo = text("", 13, MUTED);
+        packInfo.setPadding(0, dp(4), 0, dp(4));
+        packCard.addView(packInfo);
+        addPackButton = button(R.string.add_pack, view -> choosePack());
+        packCard.addView(addPackButton);
         LinearLayout identity = card(body, 0);
         title = edit(R.string.title_hint, draft.title);
         title.setSingleLine(true);
@@ -432,11 +447,7 @@ public final class MainActivity extends Activity {
     }
 
     private void refresh() {
-        packInfo.setText(pack == null ? getString(R.string.no_pack)
-                : getString(R.string.pack_count, pack.label, pack.icons.size()));
-        packPreview.setVisibility(pack == null ? View.GONE : View.VISIBLE);
-        packPreview.setImageBitmap(pack == null ? null : pack.badge);
-        packPreview.setContentDescription(pack == null ? null : pack.label);
+        refreshPacks();
         int matched = 0, manual = 0;
         for (IconRepository.App app : apps) {
             if (pack != null && pack.selected(app, draft.overrides) != null) matched++;
@@ -473,7 +484,7 @@ public final class MainActivity extends Activity {
         List<IconRepository.App> candidates = apps.stream()
                 .filter(app -> currentPack == null || currentPack.automatic(app) == null).toList();
         IconShape shape = draft.shape;
-        String key = (currentPack == null ? "" : currentPack.packageName) + ":" + shape;
+        String key = String.join(",", draft.packs) + ":" + shape;
         if (key.equals(shapePreview.getTag())) return;
         ImageView target = shapePreview;
         target.setTag(key);
@@ -606,10 +617,17 @@ public final class MainActivity extends Activity {
     }
 
     private void choosePack() {
-        choosePack(this::selectPack);
+        if (packs.size() >= IconRepository.MAX_PACKS) {
+            showError(new IOException(getString(R.string.pack_limit, IconRepository.MAX_PACKS))); return;
+        }
+        choosePack(this::selectPack, java.util.Set.copyOf(draft.packs));
     }
 
     private void choosePack(Consumer<IconRepository.Pack> selected) {
+        choosePack(selected, java.util.Set.of());
+    }
+
+    private void choosePack(Consumer<IconRepository.Pack> selected, java.util.Set<String> excluded) {
         Dialog dialog = fullDialog();
         packDialog = dialog;
         LinearLayout layout = dialogLayout(dialog, getString(R.string.choose_pack));
@@ -621,7 +639,11 @@ public final class MainActivity extends Activity {
             if (packDialog == dialog) packDialog = null;
         });
         showFull(dialog);
-        work(repository::packs, packs -> {
+        work(() -> {
+            List<IconRepository.PackInfo> found = new ArrayList<>(repository.packs());
+            found.removeIf(info -> excluded.contains(info.packageName()));
+            return found;
+        }, packs -> {
             stopLoading.run();
             if (!dialog.isShowing()) return;
             content.removeAllViews();
@@ -674,11 +696,127 @@ public final class MainActivity extends Activity {
     }
 
     void selectPack(IconRepository.Pack loaded) {
-        if (!draft.pack.isEmpty()) draft.overrides.replaceAll((key, value) ->
-                value.isEmpty() || value.contains(":") ? value : IconRepository.reference(draft.pack, value));
-        pack = loaded; draft.pack = loaded.packageName;
-        if (title.getText().toString().isBlank()) title.setText(loaded.label);
+        if (!draft.packs.contains(loaded.packageName)) {
+            if (packs.size() >= IconRepository.MAX_PACKS) {
+                showError(new IOException(getString(R.string.pack_limit, IconRepository.MAX_PACKS))); return;
+            }
+            packs.add(loaded);
+        }
+        if (title.getText().toString().isBlank()) title.setText(packs.get(0).label);
+        packsChanged();
+    }
+
+    void removePack(int index) {
+        packs.remove(index);
+        packsChanged();
+    }
+
+    void movePack(int from, int to) {
+        if (from == to || to < 0 || to >= packs.size()) return;
+        packs.add(to, packs.remove(from));
+        packsChanged();
+    }
+
+    private void packsChanged() {
+        draft.packs.clear();
+        for (IconRepository.Pack member : packs) draft.packs.add(member.packageName);
+        pack = IconRepository.combine(packs);
         images.evictAll(); saveDraft(); refresh();
+    }
+
+    private void refreshPacks() {
+        packList.removeAllViews();
+        for (int i = 0; i < packs.size(); i++) packList.addView(packRow(i));
+        packInfo.setVisibility(packs.size() == 1 ? View.GONE : View.VISIBLE);
+        packInfo.setText(packs.isEmpty() ? R.string.no_pack : R.string.pack_priority_help);
+        addPackButton.setVisibility(packs.size() >= IconRepository.MAX_PACKS ? View.GONE : View.VISIBLE);
+        addPackButton.setText(packs.isEmpty() ? R.string.choose_pack : R.string.add_pack);
+    }
+
+    private View packRow(int index) {
+        IconRepository.Pack member = packs.get(index);
+        LinearLayout item = row();
+        item.setPadding(0, dp(6), 0, dp(6));
+        item.setBackground(rounded(PANEL, 12));
+        TextView handle = text("≡", 26, MUTED);
+        handle.setGravity(Gravity.CENTER);
+        handle.setContentDescription(getString(R.string.pack_drag, member.label));
+        handle.setVisibility(packs.size() > 1 ? View.VISIBLE : View.GONE);
+        item.addView(handle, new LinearLayout.LayoutParams(dp(40), dp(48)));
+        ImageView badge = new ImageView(this);
+        badge.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        badge.setImageBitmap(member.badge);
+        item.addView(badge, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        TextView label = text(getString(R.string.pack_count, member.label, member.icons.size()), 15, ACCENT);
+        label.setPadding(dp(12), 0, dp(8), 0);
+        item.addView(label, new LinearLayout.LayoutParams(0, -2, 1));
+        Button remove = button(R.string.remove_pack, view -> removePack(packList.indexOfChild(item)));
+        remove.setMinWidth(dp(64)); remove.setMinimumWidth(dp(64));
+        remove.setPadding(dp(12), dp(6), dp(12), dp(6));
+        remove.setContentDescription(getString(R.string.remove_pack_named, member.label));
+        item.addView(remove, new LinearLayout.LayoutParams(-2, -2));
+        item.setAccessibilityDelegate(new View.AccessibilityDelegate() {
+            @Override public void onInitializeAccessibilityNodeInfo(View host, android.view.accessibility.AccessibilityNodeInfo info) {
+                super.onInitializeAccessibilityNodeInfo(host, info);
+                int position = packList.indexOfChild(item);
+                if (position > 0) info.addAction(new android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction(
+                        R.id.pack_move_up, getString(R.string.pack_move_up)));
+                if (position >= 0 && position < packs.size() - 1) info.addAction(
+                        new android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction(
+                                R.id.pack_move_down, getString(R.string.pack_move_down)));
+            }
+            @Override public boolean performAccessibilityAction(View host, int action, Bundle arguments) {
+                int position = packList.indexOfChild(item);
+                if (action == R.id.pack_move_up) { movePack(position, position - 1); return true; }
+                if (action == R.id.pack_move_down) { movePack(position, position + 1); return true; }
+                return super.performAccessibilityAction(host, action, arguments);
+            }
+        });
+        float[] start = new float[1];
+        handle.setOnTouchListener((view, event) -> {
+            int from = packList.indexOfChild(item);
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN -> {
+                    view.getParent().requestDisallowInterceptTouchEvent(true);
+                    start[0] = event.getRawY();
+                    item.setElevation(dp(8)); item.setAlpha(.9f);
+                }
+                case MotionEvent.ACTION_MOVE -> {
+                    float offset = event.getRawY() - start[0];
+                    item.setTranslationY(offset);
+                    int target = dragTarget(from, offset);
+                    for (int i = 0; i < packList.getChildCount(); i++) {
+                        if (i == from) continue;
+                        float shift = i > from && i <= target ? -item.getHeight()
+                                : i < from && i >= target ? item.getHeight() : 0;
+                        packList.getChildAt(i).setTranslationY(shift);
+                    }
+                }
+                case MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    int target = event.getActionMasked() == MotionEvent.ACTION_UP
+                            ? dragTarget(from, item.getTranslationY()) : from;
+                    for (int i = 0; i < packList.getChildCount(); i++) packList.getChildAt(i).setTranslationY(0);
+                    item.setElevation(0); item.setAlpha(1);
+                    if (target != from) movePack(from, target);
+                    else if (event.getActionMasked() == MotionEvent.ACTION_UP) view.performClick();
+                }
+                default -> { return false; }
+            }
+            return true;
+        });
+        return item;
+    }
+
+    private int dragTarget(int from, float offset) {
+        View dragged = packList.getChildAt(from);
+        float centre = dragged.getTop() + dragged.getHeight() / 2f + offset;
+        int target = from;
+        for (int i = 0; i < packList.getChildCount(); i++) {
+            View other = packList.getChildAt(i);
+            if (i > from && centre > other.getTop()) target = i;
+            if (i < from && centre < other.getBottom() && target == from) target = i;
+        }
+        return target;
     }
 
     private Runnable packSkeleton(LinearLayout content) {
@@ -781,7 +919,7 @@ public final class MainActivity extends Activity {
         iconDialog = dialog;
         dialog.setOnDismissListener(ignored -> { if (iconDialog == dialog) iconDialog = null; });
         LinearLayout layout = dialogLayout(dialog, getString(R.string.pick_icon, app.label()));
-        IconRepository.Pack[] source = {pack};
+        IconRepository.Pack[] source = {initialSource(app)};
         Button sourceButton = button(R.string.choose_pack, view -> {});
         sourceButton.setText(getString(R.string.icon_source, source[0].label));
         layout.addView(sourceButton);
@@ -858,6 +996,17 @@ public final class MainActivity extends Activity {
         });
         filter.accept("");
         showFull(dialog);
+    }
+
+    private IconRepository.Pack initialSource(IconRepository.App app) {
+        if (pack.members.isEmpty()) return pack;
+        // Open the catalogue that currently supplies this app, so its alternatives are visible first.
+        String selected = pack.selected(app, draft.overrides);
+        if (selected != null && !FileIcons.isFile(selected)) {
+            String owner = IconRepository.sourcePackage(selected, pack.packageName);
+            for (IconRepository.Pack member : pack.members) if (member.packageName.equals(owner)) return member;
+        }
+        return pack.members.get(0);
     }
 
     private void previewFileIcon(String appKey, Runnable changed, Bitmap image) {
