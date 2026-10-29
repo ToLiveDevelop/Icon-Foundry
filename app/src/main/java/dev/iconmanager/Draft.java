@@ -8,7 +8,6 @@ import java.util.Map;
 
 final class Draft {
     String title = "";
-    String filename = "";
     String pack = "";
     String tree = "";
     String coverPath = "";
@@ -29,7 +28,6 @@ final class Draft {
     static Draft fromJson(JSONObject j) throws JSONException {
         Draft d = new Draft();
         d.title = j.optString("title");
-        d.filename = j.optString("filename");
         d.pack = j.optString("pack");
         d.tree = j.optString("tree");
         d.coverPath = j.optString("coverPath");
@@ -62,7 +60,7 @@ final class Draft {
 
     JSONObject toJson() throws JSONException {
         JSONObject j = new JSONObject();
-        j.put("title", title).put("filename", filename).put("pack", pack).put("tree", tree)
+        j.put("title", title).put("pack", pack).put("tree", tree)
                 .put("coverPath", coverPath)
                 .put("wallpaperPath", wallpaperPath)
                 .put("templateId", templateId)

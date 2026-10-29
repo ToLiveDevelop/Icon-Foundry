@@ -22,6 +22,8 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.StringWriter;
 import java.security.MessageDigest;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -157,6 +159,19 @@ final class ThemeEngine {
         else value += ".hnt";
         if (value.equalsIgnoreCase(".hnt")) throw new IllegalArgumentException("filename");
         return value;
+    }
+
+    static String datedFilename(String title, LocalDateTime createdAt) {
+        String base = title.strip().replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_").replaceAll("\\s+", " ");
+        if (base.isBlank()) throw new IllegalArgumentException("Укажите название темы.");
+        base = base.replaceAll("^\\.+|[. ]+$", "_");
+        String suffix = "_" + createdAt.format(DateTimeFormatter.ofPattern("uuuu-MM-dd_HH-mm-ss-SSS", Locale.ROOT)) + ".hnt";
+        int limit = 100 - suffix.length();
+        if (base.length() > limit) {
+            int end = Character.isHighSurrogate(base.charAt(limit - 1)) ? limit - 1 : limit;
+            base = base.substring(0, end);
+        }
+        return filename(base + suffix);
     }
 
     static void validateTree(Context context, Uri tree) throws IOException {
@@ -468,9 +483,10 @@ final class ThemeEngine {
         xml.setOutput(writer);
         xml.startDocument("UTF-8", true);
         xml.startTag(null, "HnTheme");
-        String[][] fields = {{"title", title}, {"title-cn", title}, {"author", "Icon Foundry"},
-                {"designer", "Icon Foundry"}, {"version", "12"}, {"font", "Default"}, {"font-cn", "Default"},
-                {"briefInfo", "Icons from " + pack + "; personal use"}};
+        String[][] fields = {{"title", title}, {"title-cn", title}, {"author", "Icon Foundry by ToLive"},
+                {"designer", "Icon Foundry by ToLive"}, {"version", "12"}, {"font", "Default"}, {"font-cn", "Default"},
+                {"briefInfo", "На основе иконпака «" + pack + "». Права на иконки принадлежат разработчику иконпака. "
+                        + "Только для персонального использования."}};
         for (String[] field : fields) xml.startTag(null, field[0]).text(field[1]).endTag(null, field[0]);
         xml.endTag(null, "HnTheme").endDocument();
         return writer.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);

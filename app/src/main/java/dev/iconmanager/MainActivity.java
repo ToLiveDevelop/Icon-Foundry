@@ -70,11 +70,10 @@ public final class MainActivity extends Activity {
     private IconRepository.Pack pack;
     private List<IconRepository.App> apps = List.of();
     private LinearLayout root;
-    private EditText title, filename;
+    private EditText title;
     private Button exportButton;
     private TextView packInfo, appInfo, destinationInfo, status, templateHelp;
     private ImageView coverPreview, packPreview, wallpaperPreview;
-    private ProgressBar operationProgress;
     private Dialog packDialog;
     private Dialog cropDialog;
     private Dialog iconDialog;
@@ -163,7 +162,11 @@ public final class MainActivity extends Activity {
         list.setPadding(0, dp(16), 0, dp(12));
         list.setClipToPadding(false);
         root.addView(list, new LinearLayout.LayoutParams(-1, 0, 1));
-        addOperationStatus();
+        TextView empty = text(getString(R.string.no_templates), 14, MUTED);
+        empty.setGravity(Gravity.CENTER);
+        root.addView(empty, new LinearLayout.LayoutParams(-1, 0, 1));
+        list.setEmptyView(empty);
+        addDraftStatus();
         Map<String, android.graphics.drawable.Drawable> badges = new java.util.HashMap<>();
         work(() -> {
             List<TemplateStore.Entry> entries = templates.list();
@@ -178,7 +181,6 @@ public final class MainActivity extends Activity {
             }
             return entries;
         }, entries -> {
-            if (entries.isEmpty()) status.setText(R.string.no_templates);
             list.setAdapter(new BaseAdapter() {
                 @Override public int getCount() { return entries.size(); }
                 @Override public Object getItem(int position) { return entries.get(position); }
@@ -248,16 +250,11 @@ public final class MainActivity extends Activity {
                 .setNegativeButton(R.string.cancel, null).show();
     }
 
-    private void addOperationStatus() {
+    private void addDraftStatus() {
         status = text(getString(R.string.ready), 13, MUTED);
-        LinearLayout progressRow = row();
-        operationProgress = new ProgressBar(this);
-        operationProgress.setIndeterminate(true);
-        operationProgress.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(ACCENT));
-        operationProgress.setVisibility(View.GONE);
-        progressRow.addView(operationProgress, new LinearLayout.LayoutParams(dp(32), dp(32)));
-        progressRow.addView(status, new LinearLayout.LayoutParams(0, -2, 1));
-        root.addView(progressRow);
+        status.setGravity(Gravity.CENTER);
+        status.setPadding(0, dp(8), 0, dp(8));
+        root.addView(status, new LinearLayout.LayoutParams(-1, -2));
     }
 
     private void buildScreen() {
@@ -290,18 +287,13 @@ public final class MainActivity extends Activity {
         packCard.addView(selectedPack);
         LinearLayout identity = card(body, 0);
         title = edit(R.string.title_hint, draft.title);
-        filename = edit(R.string.filename_hint, draft.filename);
-        title.setSingleLine(true); filename.setSingleLine(true);
+        title.setSingleLine(true);
         TextView titleLabel = text(getString(R.string.theme_title), 14, MUTED);
-        TextView filenameLabel = text(getString(R.string.theme_filename), 14, MUTED);
         title.setId(View.generateViewId());
-        filename.setId(View.generateViewId());
         titleLabel.setLabelFor(title.getId());
-        filenameLabel.setLabelFor(filename.getId());
         identity.addView(titleLabel); identity.addView(title);
-        identity.addView(filenameLabel); identity.addView(filename);
+        identity.addView(text(getString(R.string.filename_help), 13, MUTED));
         watch(title, value -> { draft.title = value; saveDraft(); updateExportEnabled(); });
-        watch(filename, value -> { draft.filename = value; saveDraft(); updateExportEnabled(); });
         LinearLayout cover = card(body, R.string.cover);
         LinearLayout coverRow = row();
         coverPreview = new ImageView(this);
@@ -427,7 +419,7 @@ public final class MainActivity extends Activity {
         saveAsNew.setText(R.string.save_as_new_template);
         saveAsNew.setVisibility(draft.templateId.isEmpty() ? View.GONE : View.VISIBLE);
         body.addView(saveAsNew);
-        addOperationStatus();
+        addDraftStatus();
         Button export = button(R.string.export, view -> export());
         exportButton = export;
         export.setTextColor(BG); export.setBackground(buttonSurface(ACCENT, 28));
@@ -467,12 +459,7 @@ public final class MainActivity extends Activity {
 
     private void updateExportEnabled() {
         if (!editing || exportButton == null) return;
-        boolean ready = !busy && pack != null && !draft.title.isBlank()
-                && !draft.filename.isBlank() && !draft.tree.isBlank();
-        if (ready) {
-            try { ThemeEngine.filename(draft.filename); }
-            catch (IllegalArgumentException error) { ready = false; }
-        }
+        boolean ready = !busy && pack != null && !draft.title.isBlank() && !draft.tree.isBlank();
         exportButton.setEnabled(ready);
         exportButton.setAlpha(ready ? 1f : .4f);
     }
@@ -945,29 +932,13 @@ public final class MainActivity extends Activity {
         if (title.getText().toString().isBlank() || pack == null || draft.tree.isEmpty()) {
             showError(new IOException(getString(R.string.required))); return;
         }
-        String outputName;
-        try { outputName = ThemeEngine.filename(filename.getText().toString()); }
-        catch (IllegalArgumentException error) { filename.setError(getString(R.string.filename_error)); return; }
         String themeTitle = title.getText().toString().trim();
         if (themeTitle.length() > 100) { title.setError("Не более 100 символов"); return; }
         Uri tree = Uri.parse(draft.tree);
-        work(() -> {
-            ThemeEngine.validateTree(this, tree);
-            return ThemeEngine.findDocument(getContentResolver(), tree, outputName);
-        }, existing -> {
-            if (existing == null) exportTo(themeTitle, outputName, tree, null);
-            else confirmReplacement(outputName, () -> exportTo(themeTitle, outputName, tree, existing));
-        });
+        exportTo(themeTitle, ThemeEngine.datedFilename(themeTitle, java.time.LocalDateTime.now()), tree);
     }
 
-    AlertDialog confirmReplacement(String outputName, Runnable replace) {
-        return new AlertDialog.Builder(this).setTitle(R.string.replace_title)
-                .setMessage(getString(R.string.replace_message, outputName))
-                .setPositiveButton(R.string.replace, (dialog, which) -> replace.run())
-                .setNegativeButton(R.string.cancel, null).show();
-    }
-
-    private void exportTo(String themeTitle, String outputName, Uri tree, Uri replace) {
+    private void exportTo(String themeTitle, String outputName, Uri tree) {
         saveDraft();
         Draft snapshot;
         try { snapshot = Draft.fromJson(draft.toJson()); }
@@ -989,13 +960,12 @@ public final class MainActivity extends Activity {
             }
             try {
                 ThemeEngine.Result result = ThemeEngine.export(this, themeTitle, outputName, fullPack, shape, clearFolderBackground, currentPack, apps, overrides,
-                        cover, tree, replace, snapshot.wallpaperPath.isEmpty() ? null
+                        cover, tree, null, snapshot.wallpaperPath.isEmpty() ? null
                                 : new File(getFilesDir(), snapshot.wallpaperPath), (done, total) -> {
                             if (done == 1 || done == total || done % 10 == 0) runOnUiThread(() -> {
                                 if (!isDestroyed()) {
                                     String message = done == total ? getString(R.string.export_finishing)
                                             : getString(R.string.export_progress, done, total);
-                                    status.setText(message);
                                     if (progressDialog != null) progressMessage.setText(message);
                                 }
                             });
@@ -1057,8 +1027,6 @@ public final class MainActivity extends Activity {
         if (busy) { showError(new IOException(getString(R.string.busy))); return; }
         busy = true;
         enabled(root, false);
-        operationProgress.setVisibility(View.VISIBLE);
-        status.setText(R.string.loading);
         showOperationProgress(message);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         worker.execute(() -> {
@@ -1074,9 +1042,8 @@ public final class MainActivity extends Activity {
 
     private void finishWork() {
         if (progressDialog != null) { progressDialog.dismiss(); progressDialog = null; }
-        busy = false; enabled(root, true); status.setText(R.string.ready);
+        busy = false; enabled(root, true);
         updateExportEnabled();
-        operationProgress.setVisibility(View.GONE);
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     }
 

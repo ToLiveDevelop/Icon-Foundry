@@ -190,6 +190,22 @@ public final class DeviceTests extends Instrumentation {
         for (String invalid : List.of("", "../bad", "a\\b", "a:b", ".hnt", "a\nb", "bad?")) {
             expectFailure(() -> ThemeEngine.filename(invalid), "Invalid filename: " + invalid);
         }
+        var createdAt = java.time.LocalDateTime.of(2026, 10, 29, 15, 55, 19, 385_000_000);
+        String dated = ThemeEngine.datedFilename("Моя тема", createdAt);
+        check(dated.equals("Моя тема_2026-10-29_15-55-19-385.hnt"),
+                "Automatic filename includes theme title and local date/time through milliseconds");
+        check(!dated.equals(ThemeEngine.datedFilename("Моя тема", createdAt.plusNanos(1_000_000))),
+                "Timestamp distinguishes consecutive exports without changing theme title");
+        for (String name : List.of(" .a/b:c*?\"<>|\n", "Т".repeat(100), "\uD83D\uDE00".repeat(50))) {
+            String generated = ThemeEngine.datedFilename(name, createdAt);
+            check(generated.length() <= 100 && generated.getBytes(StandardCharsets.UTF_8).length <= 255
+                            && ThemeEngine.filename(generated).equals(generated)
+                            && generated.endsWith("_2026-10-29_15-55-19-385.hnt"),
+                    "Automatic filename sanitizes forbidden characters and preserves timestamp within filesystem limits");
+            check(generated.equals(new String(generated.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8)),
+                    "Truncating filename never splits a supplementary Unicode character");
+        }
+        expectFailure(() -> ThemeEngine.datedFilename(" \t ", createdAt), "Blank title cannot generate filename");
         expectFailure(() -> ThemeEngine.validateTree(context, Uri.parse(
                 "content://com.android.externalstorage.documents/tree/primary%3ADownload")), "Wrong export directory");
         String path = arguments.getString("sample",
@@ -238,6 +254,7 @@ public final class DeviceTests extends Instrumentation {
                 String xml = new String(zip.getInputStream(zip.getEntry("description.xml")).readAllBytes(), StandardCharsets.UTF_8);
                 check(xml.contains("&amp;") && xml.contains("&lt;"), "Title escaped as XML");
                 check(xml.contains("<HnTheme>"), "Honor metadata root retained");
+                verifyDescription(xml.getBytes(StandardCharsets.UTF_8), "Проверка & <иконки>", pack.label);
                 check(zip.size() == 6 && zip.getEntry("preview/icon_small.jpg") != null,
                         "Icon-only theme includes catalogue thumbnail and explicit preview directory");
                 try (ZipInputStream icons = new ZipInputStream(zip.getInputStream(zip.getEntry("icons")))) {
@@ -684,9 +701,10 @@ public final class DeviceTests extends Instrumentation {
                         "Pack picker has no redundant dismissal button");
                 check(findText(dialog.getWindow().getDecorView(), context.getString(R.string.loading)) != null,
                         "Picker immediately shows loading state");
-                android.widget.ProgressBar progress = (android.widget.ProgressBar) field(activity, "operationProgress");
-                check(progress.getVisibility() == android.view.View.VISIBLE && progress.isIndeterminate(),
-                        "Background operation shows an indeterminate indicator");
+                check(progressCount(activity.getWindow().getDecorView()) == 0,
+                        "Pack skeleton does not add a duplicate spinner to editor");
+                check(activity.getString(R.string.ready).contentEquals(((android.widget.TextView) field(activity, "status")).getText()),
+                        "Draft footer does not change while pack discovery is loading");
             });
             waitForWork(activity);
             runOnMainSync(() -> {
@@ -701,8 +719,7 @@ public final class DeviceTests extends Instrumentation {
                 check(label.equals(info.label()) && item.getChildCount() == 2,
                         "Loaded pack row displays application title without a package-name subtitle");
                 dialog.dismiss();
-                check(((android.widget.ProgressBar) field(activity, "operationProgress")).getVisibility()
-                        == android.view.View.GONE, "Operation indicator hides after completion");
+                check(!(boolean) field(activity, "busy"), "Pack discovery finishes before picker is used");
             });
             verifyOperationUi((MainActivity) activity);
             verifyThemeEditing((MainActivity) activity, pack);
@@ -741,18 +758,41 @@ public final class DeviceTests extends Instrumentation {
             waitForWork(activity);
             String firstId = "";
             for (int step = 0; step < 3; step++) {
-                String filename = "_IconManager_template_" + java.util.UUID.randomUUID() + ".hnt";
-                filenames.add(filename);
                 int current = step;
+                String themeTitle = current == 2 ? "Template copy" : "Template integration";
                 runOnMainSync(() -> {
-                    ((android.widget.EditText) field(activity, "filename")).setText(filename);
-                    ((android.widget.EditText) field(activity, "title")).setText("Template revision " + current);
+                    ((android.widget.EditText) field(activity, "title")).setText(themeTitle);
                     ((android.widget.CheckBox) field(activity, "saveAsNew")).setChecked(current == 2);
                     findText(activity.getWindow().getDecorView(), activity.getString(R.string.export)).performClick();
                 });
                 waitForWork(activity);
+                String[] actualName = {null};
+                runOnMainSync(() -> {
+                    android.app.AlertDialog dialog = (android.app.AlertDialog) field(activity, "exportDialog");
+                    check(dialog != null && dialog.isShowing(), "Generated filename reported after successful export");
+                    String message = ((android.widget.TextView) dialog.findViewById(android.R.id.message)).getText().toString();
+                    check(message.startsWith("Honor/Themes/"), "Success identifies actual export directory");
+                    actualName[0] = message.substring("Honor/Themes/".length()).split("\n", 2)[0];
+                });
+                String filename = actualName[0];
+                filenames.add(filename);
+                check(filename.matches(themeTitle + "_\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2}-\\d{3}\\.hnt"),
+                        "Real export automatically generates dated filename from unchanged theme title");
                 check(ThemeEngine.findDocument(activity.getContentResolver(), tree, filename) != null,
                         "Template integration writes verified .hnt through real export button");
+                try (var input = activity.getContentResolver().openInputStream(
+                        ThemeEngine.findDocument(activity.getContentResolver(), tree, filename));
+                     ZipInputStream zip = new ZipInputStream(input)) {
+                    boolean found = false;
+                    for (ZipEntry entry; (entry = zip.getNextEntry()) != null;) {
+                        if (entry.getName().equals("description.xml")) {
+                            verifyDescription(zip.readAllBytes(), themeTitle, ((IconRepository.Pack) field(activity, "pack")).label);
+                            found = true;
+                            break;
+                        }
+                    }
+                    check(found, "Export contains theme metadata with untimestamped display title");
+                }
                 List<TemplateStore.Entry> entries = store.list();
                 check(entries.size() == (step == 2 ? 2 : 1), "Automatic template save has expected create/update/copy semantics");
                 if (step == 0) firstId = entries.get(0).id();
@@ -767,6 +807,8 @@ public final class DeviceTests extends Instrumentation {
                     dialog.dismiss();
                 });
             }
+            check(new java.util.HashSet<>(filenames).size() == 3,
+                    "Repeated export of same title creates separate files rather than replacing an old theme");
             String originalId = firstId;
             runOnMainSync(() -> findText(activity.getWindow().getDecorView(),
                     activity.getString(R.string.templates)).performClick());
@@ -789,24 +831,22 @@ public final class DeviceTests extends Instrumentation {
             runOnMainSync(() -> {
                 check(((Draft) field(activity, "draft")).templateId.equals(originalId),
                         "Selecting a template opens that template for subsequent overwrite");
-                check(((android.widget.EditText) field(activity, "title")).getText().toString().equals("Template revision 1"),
+                check(((android.widget.EditText) field(activity, "title")).getText().toString().equals("Template integration"),
                         "Opening older template restores its independent settings");
             });
             byte[] before = Files.readAllBytes(new File(directory, "templates.json").toPath());
-            String failedName = "_IconManager_template_" + java.util.UUID.randomUUID() + ".hnt";
-            filenames.add(failedName);
+            java.util.Set<String> documentsBeforeFailure = exportDocuments(activity, tree);
             runOnMainSync(() -> {
                 Draft current = (Draft) field(activity, "draft");
                 @SuppressWarnings("unchecked")
                 List<IconRepository.App> apps = (List<IconRepository.App>) field(activity, "apps");
                 current.overrides.put(apps.get(0).key(), "dev.missing.iconpack:missing");
-                ((android.widget.EditText) field(activity, "filename")).setText(failedName);
                 findText(activity.getWindow().getDecorView(), activity.getString(R.string.export)).performClick();
             });
             waitForWork(activity);
             check(java.util.Arrays.equals(before, Files.readAllBytes(new File(directory, "templates.json").toPath())),
                     "Failed icon resolution leaves previously saved templates byte-for-byte unchanged");
-            check(ThemeEngine.findDocument(activity.getContentResolver(), tree, failedName) == null,
+            check(exportDocuments(activity, tree).equals(documentsBeforeFailure),
                     "Failed icon resolution does not create a theme document");
             runOnMainSync(() -> {
                 android.app.AlertDialog error = (android.app.AlertDialog) field(activity, "errorDialog");
@@ -891,6 +931,48 @@ public final class DeviceTests extends Instrumentation {
         }
     }
 
+    private java.util.Set<String> exportDocuments(Context context, Uri tree) throws Exception {
+        Uri children = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(
+                tree, android.provider.DocumentsContract.getTreeDocumentId(tree));
+        java.util.Set<String> ids = new java.util.HashSet<>();
+        try (var cursor = context.getContentResolver().query(children,
+                new String[]{android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID}, null, null, null)) {
+            if (cursor == null) throw new java.io.IOException("Cannot enumerate test export directory");
+            while (cursor.moveToNext()) ids.add(cursor.getString(0));
+        }
+        return ids;
+    }
+
+    private void verifyDescription(byte[] xml, String title, String packLabel) throws Exception {
+        var parser = android.util.Xml.newPullParser();
+        parser.setInput(new java.io.ByteArrayInputStream(xml), "UTF-8");
+        Map<String, String> fields = new LinkedHashMap<>();
+        for (int event = parser.next(); event != org.xmlpull.v1.XmlPullParser.END_DOCUMENT; event = parser.next()) {
+            if (event == org.xmlpull.v1.XmlPullParser.START_TAG && parser.getDepth() == 2) {
+                String name = parser.getName();
+                fields.put(name, parser.nextText());
+            }
+        }
+        check(title.equals(fields.get("title")) && title.equals(fields.get("title-cn")),
+                "Display title remains unchanged and is properly XML-escaped, without filename timestamp");
+        check("Icon Foundry by ToLive".equals(fields.get("author"))
+                        && "Icon Foundry by ToLive".equals(fields.get("designer")),
+                "Theme credits identify Icon Foundry by ToLive in author and designer fields");
+        check(("На основе иконпака «" + packLabel
+                        + "». Права на иконки принадлежат разработчику иконпака. Только для персонального использования.")
+                        .equals(fields.get("briefInfo")),
+                "Description credits actual base pack and its developer, with personal-use restriction");
+        check("12".equals(fields.get("version")), "Compatible theme revision retained without risky automatic upgrades");
+    }
+
+    private int progressCount(android.view.View view) {
+        int count = view instanceof android.widget.ProgressBar ? 1 : 0;
+        if (view instanceof android.view.ViewGroup group) {
+            for (int i = 0; i < group.getChildCount(); i++) count += progressCount(group.getChildAt(i));
+        }
+        return count;
+    }
+
     private void setField(Object target, String name, Object value) {
         try {
             java.lang.reflect.Field field = target.getClass().getDeclaredField(name);
@@ -951,7 +1033,6 @@ public final class DeviceTests extends Instrumentation {
                 Draft settings = new Draft();
                 settings.pack = pack.packageName;
                 settings.title = "My mixed theme";
-                settings.filename = "Mixed.hnt";
                 settings.tree = "content://test/tree";
                 settings.shape = IconShape.SQUIRCLE;
                 settings.fullPack = true;
@@ -968,7 +1049,7 @@ public final class DeviceTests extends Instrumentation {
                 settings.title = "Unsaved change";
                 Files.write(coverFile.toPath(), new byte[]{1, 2, 3});
                 Draft restored = store.open(first.id());
-                check(restored.title.equals("My mixed theme") && restored.filename.equals("Mixed.hnt")
+                check(restored.title.equals("My mixed theme") && !restored.toJson().has("filename")
                         && restored.pack.equals(pack.packageName) && restored.tree.equals("content://test/tree")
                         && restored.shape == IconShape.SQUIRCLE && restored.fullPack && !restored.clearFolderBackground,
                         "All main template settings round-trip independently from the editing draft");
@@ -985,9 +1066,12 @@ public final class DeviceTests extends Instrumentation {
                         "Save-as-new creates a separate template without overwriting original");
                 check(store.list().get(0).id().equals(copied.id()), "Newest templates appear first");
                 org.json.JSONObject legacy = settings.toJson();
+                legacy.put("filename", "Old manually chosen name.hnt");
                 legacy.getJSONObject("overrides").put(app.key(), "google_phone");
                 check(Draft.fromJson(legacy).overrides.get(app.key()).equals(pack.packageName + ":google_phone"),
                         "Old manual assignments migrate to explicit original-pack references");
+                check(Draft.fromJson(legacy).title.equals(settings.title) && !Draft.fromJson(legacy).toJson().has("filename"),
+                        "Legacy template filenames are ignored without changing title or other settings");
             } finally {
                 Files.deleteIfExists(storeFile.toPath());
                 Files.deleteIfExists(coverFile.toPath());
@@ -1349,19 +1433,15 @@ public final class DeviceTests extends Instrumentation {
     private void verifyThemeEditing(MainActivity activity, IconRepository.Pack pack) throws Exception {
         runOnMainSync(() -> {
             android.widget.EditText title = (android.widget.EditText) field(activity, "title");
-            android.widget.EditText filename = (android.widget.EditText) field(activity, "filename");
-            String savedTitle = title.getText().toString(), savedFilename = filename.getText().toString();
+            String savedTitle = title.getText().toString();
             Draft editingDraft = (Draft) field(activity, "draft");
             String savedTree = editingDraft.tree;
             android.widget.Button export = (android.widget.Button) field(activity, "exportButton");
             title.setText("Button check");
-            filename.setText("");
-            check(!export.isEnabled(), "Export disabled without filename");
-            filename.setText("ButtonCheck.hnt");
-            check(export.isEnabled(), "Export enabled with loaded pack, title, filename and granted tree");
+            check(export.isEnabled(), "Export enabled with loaded pack, title and granted tree, without manual filename");
             IconRepository.Pack loadedPack = (IconRepository.Pack) field(activity, "pack");
             setField(activity, "pack", null);
-            filename.setText("ButtonCheck.hnt");
+            title.setText("Button check");
             check(!export.isEnabled(), "Export disabled without loaded icon pack");
             setField(activity, "pack", loadedPack);
             @SuppressWarnings("unchecked")
@@ -1377,12 +1457,12 @@ public final class DeviceTests extends Instrumentation {
             check(!export.isEnabled(), "Export disabled for whitespace title");
             title.setText("Button check");
             editingDraft.tree = "";
-            filename.setText("ButtonCheck.hnt");
+            title.setText("Button check");
             check(!export.isEnabled(), "Export disabled without destination");
             editingDraft.tree = savedTree;
-            filename.setText("bad/name");
-            check(!export.isEnabled(), "Export disabled for invalid filename");
-            title.setText(savedTitle); filename.setText(savedFilename);
+            title.setText("Custom / name: icons");
+            check(export.isEnabled(), "Characters sanitized in auto filename do not restrict the display title");
+            title.setText(savedTitle);
             android.widget.Button coverButton = (android.widget.Button) findText(
                     activity.getWindow().getDecorView(), activity.getString(R.string.choose_cover));
             float density = activity.getResources().getDisplayMetrics().density;
@@ -1401,30 +1481,18 @@ public final class DeviceTests extends Instrumentation {
                 check(title.getText().toString().equals("Custom name"), "Selecting pack preserves nonempty theme title");
                 android.widget.TextView titleLabel = findText(activity.getWindow().getDecorView(),
                         activity.getString(R.string.theme_title));
-                android.widget.TextView filenameLabel = findText(activity.getWindow().getDecorView(),
-                        activity.getString(R.string.theme_filename));
                 check(titleLabel != null && titleLabel != title && titleLabel.getLabelFor() == title.getId(),
                         "Theme title retains a permanent associated label when filled");
-                check(filenameLabel != null && filenameLabel != filename && filenameLabel.getLabelFor() == filename.getId(),
-                        "Filename retains a permanent associated label when filled");
-                check(filename.getText().toString().equals(savedFilename), "Pack selection preserves filename");
+                android.widget.LinearLayout identity = (android.widget.LinearLayout) title.getParent();
+                check(identity.getChildCount() == 3 && identity.getChildAt(2) instanceof android.widget.TextView
+                                && activity.getString(R.string.filename_help)
+                                        .contentEquals(((android.widget.TextView) identity.getChildAt(2)).getText()),
+                        "Filename input replaced by concise automatic naming hint");
                 android.widget.LinearLayout body = (android.widget.LinearLayout) title.getParent().getParent();
                 check(findText(body.getChildAt(2), activity.getString(R.string.choose_pack)) != null,
                         "Pack selection is the first form card");
-                java.util.concurrent.atomic.AtomicBoolean replaced = new java.util.concurrent.atomic.AtomicBoolean();
-                android.app.AlertDialog cancel = activity.confirmReplacement("existing.hnt", () -> replaced.set(true));
-                try { cancel.getButton(android.app.AlertDialog.BUTTON_NEGATIVE).performClick(); }
-                finally { cancel.dismiss(); }
-                check(!replaced.get(), "Cancelling replacement does not start write");
-            } finally { title.setText(savedTitle); filename.setText(savedFilename); }
+            } finally { title.setText(savedTitle); }
         });
-        java.util.concurrent.atomic.AtomicBoolean replaced = new java.util.concurrent.atomic.AtomicBoolean();
-        runOnMainSync(() -> {
-            android.app.AlertDialog dialog = activity.confirmReplacement("existing.hnt", () -> replaced.set(true));
-            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick();
-        });
-        waitForIdleSync();
-        check(replaced.get(), "Replacement starts only after explicit positive confirmation");
     }
 
     private void verifyOperationUi(MainActivity activity) throws Exception {
@@ -1445,12 +1513,17 @@ public final class DeviceTests extends Instrumentation {
             });
             Thread.sleep(300);
             runOnMainSync(() -> {
-                android.widget.ProgressBar progress = (android.widget.ProgressBar) field(activity, "operationProgress");
-                check(progress.getVisibility() == android.view.View.VISIBLE && progress.isIndeterminate(),
-                        "Indeterminate indicator stays visible while background save is unfinished");
+                check(progressCount(activity.getWindow().getDecorView()) == 0,
+                        "Editor footer never shows duplicate progress indicator");
+                android.widget.TextView footer = (android.widget.TextView) field(activity, "status");
+                check(activity.getString(R.string.ready).contentEquals(footer.getText())
+                                && (footer.getGravity() & android.view.Gravity.HORIZONTAL_GRAVITY_MASK)
+                                        == android.view.Gravity.CENTER_HORIZONTAL,
+                        "Draft message remains centered and unchanged during work");
                 check(!succeeded.get(), "No premature success while save is unfinished");
                 android.app.Dialog popup = (android.app.Dialog) field(activity, "progressDialog");
                 check(popup != null && popup.isShowing(), "Background work shows central progress popup");
+                check(progressCount(popup.getWindow().getDecorView()) == 1, "Only popup contains a loading spinner");
                 var window = popup.getWindow().getAttributes();
                 check((window.flags & android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND) != 0
                         && window.dimAmount >= .6f && window.gravity == android.view.Gravity.CENTER,
@@ -1463,8 +1536,10 @@ public final class DeviceTests extends Instrumentation {
         runOnMainSync(() -> {
             check(succeeded.get(), "Success delivered after background save completes");
             check(field(activity, "progressDialog") == null, "Progress popup dismissed after success");
-            check(((android.widget.ProgressBar) field(activity, "operationProgress")).getVisibility()
-                    == android.view.View.GONE, "Save indicator removed on completion");
+            check(progressCount(activity.getWindow().getDecorView()) == 0
+                            && activity.getString(R.string.ready)
+                                    .contentEquals(((android.widget.TextView) field(activity, "status")).getText()),
+                    "Draft footer is unchanged after operation completes");
         });
         android.content.Intent intent = MainActivity.themesIntent(activity.getPackageManager());
         ActivityMonitor monitor = addMonitor(intent.getComponent().getClassName(), null, true);
