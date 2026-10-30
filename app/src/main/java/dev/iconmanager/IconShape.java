@@ -76,8 +76,8 @@ enum IconShape {
     Bitmap mask() { return mask(SIZE - 2 * INSET); }
 
     Bitmap mask(int visibleSize) {
-        if (visibleSize < 1 || visibleSize > SIZE) throw new IllegalArgumentException("Некорректный размер фигуры маски.");
-        if (this == NONE) throw new IllegalStateException("Нет выбранной маски.");
+        if (visibleSize < 1 || visibleSize > SIZE) throw new IllegalArgumentException(App.text(R.string.shape_size_invalid));
+        if (this == NONE) throw new IllegalStateException(App.text(R.string.shape_not_selected));
         Path path = new Path();
         switch (this) {
             case CIRCLE -> path.addCircle(.5f, .5f, .5f, Path.Direction.CW);
@@ -95,7 +95,7 @@ enum IconShape {
                 }
                 path.close();
             }
-            default -> throw new IllegalStateException("Неизвестная форма.");
+            default -> throw new IllegalStateException(App.text(R.string.shape_unknown));
         }
         float inset = (SIZE - visibleSize) / 2f;
         Matrix transform = new Matrix();

@@ -20,6 +20,8 @@ final class Draft {
     boolean fullPack;
     boolean clearFolderBackground = true;
     boolean systemIcons;
+    String overlay = "";
+    boolean overlayAll;
     IconShape shape = IconShape.ROUNDED_SQUARE;
     final Map<String, String> overrides = new LinkedHashMap<>();
 
@@ -43,10 +45,13 @@ final class Draft {
         d.fullPack = j.optBoolean("fullPack");
         d.clearFolderBackground = j.optBoolean("clearFolderBackground", true);
         d.systemIcons = j.optBoolean("systemIcons");
+        d.overlay = j.optString("overlay");
+        if (!d.overlay.isEmpty() && !FileIcons.isFile(d.overlay)) throw new JSONException(App.text(R.string.overlay_invalid));
+        d.overlayAll = j.optBoolean("overlayAll");
         try {
             d.shape = IconShape.valueOf(j.optString("shape", IconShape.NONE.name()));
         } catch (IllegalArgumentException error) {
-            throw new JSONException("Неизвестная сохранённая форма иконки: " + j.optString("shape"), error);
+            throw new JSONException(App.text(R.string.saved_shape_error) + j.optString("shape"), error);
         }
         JSONObject overrides = j.optJSONObject("overrides");
         if (overrides != null) {
@@ -71,7 +76,8 @@ final class Draft {
     }
 
     boolean hasUnsavedChanges(Context context) {
-        if (packs.isEmpty() && title.isEmpty() && overrides.isEmpty() && coverPath.isEmpty() && wallpaperPath.isEmpty()) {
+        if (packs.isEmpty() && title.isEmpty() && overrides.isEmpty() && coverPath.isEmpty()
+                && wallpaperPath.isEmpty() && overlay.isEmpty()) {
             return false;
         }
         if (templateId.isEmpty()) return true;
@@ -92,6 +98,7 @@ final class Draft {
                 java.io.File file = new java.io.File(context.getFilesDir(), path);
                 if (file.isFile()) digest.update(java.nio.file.Files.readAllBytes(file.toPath()));
             }
+            if (!overlay.isEmpty()) digest.update(FileIcons.bytes(context, overlay));
         }
         StringBuilder hex = new StringBuilder();
         for (byte value : digest.digest()) hex.append(String.format(java.util.Locale.ROOT, "%02x", value));
@@ -111,16 +118,23 @@ final class Draft {
         // A single pack keeps the original format, so older templates and fingerprints stay identical.
         if (packs.size() > 1) j.put("packs", new JSONArray(packs));
         if (systemIcons) j.put("systemIcons", true);
+        if (!overlay.isEmpty()) j.put("overlay", overlay).put("overlayAll", overlayAll);
         return j;
     }
 
     String primaryPack() { return packs.isEmpty() ? "" : packs.get(0); }
 
+    List<String> fileReferences() {
+        List<String> references = new ArrayList<>(overrides.values());
+        if (!overlay.isEmpty()) references.add(overlay);
+        return references;
+    }
+
     private void addPack(String packageName) throws JSONException {
-        if (!IconRepository.safeName(packageName)) throw new JSONException("Некорректный иконпак: " + packageName);
+        if (!IconRepository.safeName(packageName)) throw new JSONException(App.text(R.string.saved_pack_error) + packageName);
         if (packs.contains(packageName)) return;
         if (packs.size() == IconRepository.MAX_PACKS) {
-            throw new JSONException("Не более " + IconRepository.MAX_PACKS + " иконпаков.");
+            throw new JSONException(App.text(R.string.pack_limit_prefix) + IconRepository.MAX_PACKS + App.text(R.string.pack_limit_suffix));
         }
         packs.add(packageName);
     }

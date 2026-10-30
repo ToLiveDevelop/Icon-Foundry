@@ -111,7 +111,7 @@ final class IconRepository {
                     if (!bounds.isEmpty()) sizes.add(Math.max(bounds.width(), bounds.height()));
                 } finally { bitmap.recycle(); }
             }
-            if (sizes.isEmpty()) throw new IOException("В иконпаке не найдены видимые иконки для определения размера маски.");
+            if (sizes.isEmpty()) throw new IOException(dev.iconmanager.App.text(R.string.pack_size_error));
             sizes.sort(Integer::compare);
             fallbackSize = sizes.get(sizes.size() / 2);
             return fallbackSize;
@@ -148,23 +148,23 @@ final class IconRepository {
                 Icon icon = icons.get(resource);
                 resourceId = icon == null ? resources.getIdentifier(resource, "drawable", source) : icon.id();
                 if (resourceId == 0) resourceId = resources.getIdentifier(resource, "mipmap", source);
-                if (resourceId == 0) throw new IOException("В паке " + label + " больше нет иконки " + resource
-                        + ". Выберите замену.");
+                if (resourceId == 0) throw new IOException(dev.iconmanager.App.text(R.string.pack_resource_prefix) + label + dev.iconmanager.App.text(R.string.pack_resource_missing) + resource
+                        + dev.iconmanager.App.text(R.string.choose_replacement));
             } else {
                 try { sourceResources = manager.getResourcesForApplication(source); }
                 catch (PackageManager.NameNotFoundException error) {
-                    throw new IOException("Иконпак не установлен: " + source + ". Установите его или замените назначение.", error);
+                    throw new IOException(dev.iconmanager.App.text(R.string.pack_missing_prefix) + source + dev.iconmanager.App.text(R.string.pack_missing_help), error);
                 }
                 resourceId = sourceResources.getIdentifier(resource, "drawable", source);
                 if (resourceId == 0) resourceId = sourceResources.getIdentifier(resource, "mipmap", source);
-                if (resourceId == 0) throw new IOException("В паке " + source + " больше нет иконки " + resource
-                        + ". Выберите замену.");
+                if (resourceId == 0) throw new IOException(dev.iconmanager.App.text(R.string.pack_resource_prefix) + source + dev.iconmanager.App.text(R.string.pack_resource_missing) + resource
+                        + dev.iconmanager.App.text(R.string.choose_replacement));
             }
             Drawable drawable;
             try {
                 drawable = sourceResources.getDrawableForDensity(resourceId, 0, null).mutate();
             } catch (Resources.NotFoundException e) {
-                throw new IOException("Ресурс иконки недоступен: " + name, e);
+                throw new IOException(dev.iconmanager.App.text(R.string.icon_resource_error) + name, e);
             }
             Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
             int width = Math.max(1, drawable.getIntrinsicWidth());
@@ -184,7 +184,7 @@ final class IconRepository {
     static Pack combine(List<Pack> packs) {
         if (packs.isEmpty()) return null;
         if (packs.size() == 1) return packs.get(0);
-        if (packs.size() > MAX_PACKS) throw new IllegalArgumentException("Не более " + MAX_PACKS + " иконпаков.");
+        if (packs.size() > MAX_PACKS) throw new IllegalArgumentException(dev.iconmanager.App.text(R.string.pack_limit_prefix) + MAX_PACKS + dev.iconmanager.App.text(R.string.pack_limit_suffix));
         Pack first = packs.get(0);
         Pack combined = new Pack(first.packageName, String.join(" + ", packs.stream().map(pack -> pack.label).toList()),
                 first.resources, first.badge, first.manager);
@@ -250,7 +250,7 @@ final class IconRepository {
                         if ("appfilter.xml".equals(asset)) hasFilter = true;
                     }
                 } catch (IOException e) {
-                    throw new IllegalStateException("Не удалось прочитать ресурсы " + packageName, e);
+                    throw new IllegalStateException(dev.iconmanager.App.text(R.string.pack_resources_error) + packageName, e);
                 }
             }
             if (hasFilter) {
@@ -280,28 +280,28 @@ final class IconRepository {
                 drawable = prefix + Calendar.getInstance().get(Calendar.DAY_OF_MONTH);
             }
             if (drawable == null || drawable.isBlank()) return;
-            if (addIcon(pack, drawable, "Из appfilter")) {
+            if (addIcon(pack, drawable, dev.iconmanager.App.text(R.string.from_appfilter))) {
                 pack.mappings.putIfAbsent(component.flattenToString(), drawable);
                 pack.byPackage.putIfAbsent(component.getPackageName(), drawable);
             }
         }, () -> {}, () -> !pack.mappings.isEmpty());
-        String[] category = {"Все"};
+        String[] category = {dev.iconmanager.App.text(R.string.category_all)};
         java.util.Set<String> catalogued = new java.util.HashSet<>();
         // Some packs expose no catalogue; their mapped resources remain selectable.
         if (hasXml(resources, packageName, "drawable")) {
             parse(resources, packageName, "drawable", parser -> {
                 if (parser.getName().equals("category")) {
                     category[0] = parser.getAttributeValue(null, "title");
-                    if (category[0] == null) category[0] = "Все";
+                    if (category[0] == null) category[0] = dev.iconmanager.App.text(R.string.category_all);
                 } else if (parser.getName().equals("item")) {
                     String name = parser.getAttributeValue(null, "drawable");
                     if (name != null && !catalogued.contains(name) && addIcon(pack, name, category[0])) {
                         catalogued.add(name);
                     }
                 }
-            }, () -> category[0] = "Все", () -> !catalogued.isEmpty());
+            }, () -> category[0] = dev.iconmanager.App.text(R.string.category_all), () -> !catalogued.isEmpty());
         }
-        if (pack.icons.isEmpty()) throw new IOException("В appfilter нет доступных ресурсов иконок.");
+        if (pack.icons.isEmpty()) throw new IOException(dev.iconmanager.App.text(R.string.pack_empty));
         return pack;
     }
 
@@ -329,7 +329,7 @@ final class IconRepository {
     }
 
     static String reference(String packageName, String resource) {
-        if (!safeName(packageName) || !safeName(resource)) throw new IllegalArgumentException("Некорректная ссылка на иконку.");
+        if (!safeName(packageName) || !safeName(resource)) throw new IllegalArgumentException(dev.iconmanager.App.text(R.string.reference_invalid));
         return packageName + ":" + resource;
     }
 
@@ -378,7 +378,7 @@ final class IconRepository {
             if (file.equals(name + ".xml")) asset = true;
         }
         int id = resources.getIdentifier(name, "xml", packageName);
-        if (id == 0 && !asset) throw new IOException("Нет " + name + ".xml в " + packageName);
+        if (id == 0 && !asset) throw new IOException(dev.iconmanager.App.text(R.string.xml_missing_prefix) + name + dev.iconmanager.App.text(R.string.xml_missing_in) + packageName);
         if (id != 0) {
             try (XmlResourceParser parser = resources.getXml(id)) {
                 readTags(parser, reader);

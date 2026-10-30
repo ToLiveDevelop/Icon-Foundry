@@ -58,10 +58,9 @@ import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
 public final class MainActivity extends Activity {
-    private static final int COVER = 11, DIRECTORY = 12, WALLPAPER = 13, ICON_FILE = 14;
-    private static final int BG = Color.BLACK, PANEL = Color.rgb(24, 24, 24);
-    private static final int ACCENT = Color.rgb(255, 193, 7), MUTED = Color.rgb(189, 189, 189);
-    private static final int CONTROL = Color.rgb(36, 36, 36);
+    private static final int COVER = 11, DIRECTORY = 12, WALLPAPER = 13, ICON_FILE = 14, OVERLAY_FILE = 15;
+    private int BG, PANEL, MUTED, CONTROL, INK, ACCENT_TEXT;
+    private static final int ACCENT = Color.rgb(255, 193, 7);
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final ExecutorService thumbnails = Executors.newFixedThreadPool(2);
     private final LruCache<String, Bitmap> images = new LruCache<>(12 * 1024 * 1024) {
@@ -90,8 +89,11 @@ public final class MainActivity extends Activity {
     private String pendingIconApp;
     private Runnable pendingIconChanged;
     private Dialog fileIconDialog;
+    private Dialog settingsDialog, overlayDialog;
     private RadioGroup exportScope;
     private ImageView shapePreview;
+    private Button removeOverlay;
+    private RadioGroup overlayScope;
     private boolean busy;
     private boolean editing;
     private TemplateStore templates;
@@ -99,21 +101,93 @@ public final class MainActivity extends Activity {
     private record SavedExport(ThemeEngine.Result theme, TemplateStore.Entry template, String title) {}
     private final java.util.Set<String> reportedImageErrors = new java.util.HashSet<>();
 
+    @Override protected void attachBaseContext(android.content.Context base) {
+        super.attachBaseContext(App.themed(base));
+    }
+
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        boolean dark = (getResources().getConfiguration().uiMode
+                & android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+        BG = dark ? Color.BLACK : Color.rgb(245, 245, 245);
+        PANEL = dark ? Color.rgb(24, 24, 24) : Color.WHITE;
+        CONTROL = dark ? Color.rgb(36, 36, 36) : Color.rgb(229, 229, 229);
+        MUTED = dark ? Color.rgb(189, 189, 189) : Color.rgb(95, 95, 95);
+        INK = dark ? Color.WHITE : Color.rgb(32, 32, 32);
+        ACCENT_TEXT = dark ? ACCENT : Color.rgb(112, 78, 0);
         if (savedInstanceState != null) pendingIconApp = savedInstanceState.getString("pendingIconApp");
         repository = new IconRepository(this);
         templates = new TemplateStore(this);
         Exception draftError = null;
         try { draft = Draft.load(this); }
         catch (org.json.JSONException e) { draft = new Draft(); draftError = e; }
-        showTemplates();
+        if (savedInstanceState != null && savedInstanceState.getBoolean("editing")) openEditor();
+        else showTemplates();
         if (draftError != null) showError(draftError);
         getOnBackInvokedDispatcher().registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, () -> {
             if (busy) showError(new IOException(getString(R.string.busy)));
             else if (editing) { saveDraft(); showTemplates(); }
             else finish();
         });
+    }
+
+    private void showSettings() {
+        Dialog dialog = fullDialog();
+        settingsDialog = dialog;
+        LinearLayout content = scrollingDialogLayout(dialog, getString(R.string.settings));
+        content.addView(text(getString(R.string.appearance), 18, INK));
+        String[] themes = {"system", "dark", "light"};
+        RadioGroup appearance = new RadioGroup(this);
+        int[] labels = {R.string.theme_system, R.string.theme_dark, R.string.theme_light};
+        String selected = getSharedPreferences("settings", 0).getString("theme", "system");
+        for (int i = 0; i < themes.length; i++) {
+            RadioButton option = new RadioButton(this);
+            option.setId(View.generateViewId());
+            option.setText(labels[i]); option.setTag(themes[i]);
+            appearance.addView(option);
+            if (themes[i].equals(selected)) appearance.check(option.getId());
+        }
+        content.addView(appearance);
+        content.addView(text(getString(R.string.language), 18, INK));
+        RadioGroup language = new RadioGroup(this);
+        String current = getSystemService(android.app.LocaleManager.class).getApplicationLocales().toLanguageTags();
+        for (String code : new String[]{"en", "ru"}) {
+            RadioButton option = new RadioButton(this);
+            option.setId(View.generateViewId());
+            option.setText(code.equals("ru") ? "Русский" : "English"); option.setTag(code);
+            language.addView(option);
+            if (current.startsWith(code)) language.check(option.getId());
+        }
+        content.addView(language);
+        content.addView(button(R.string.apply_settings, view -> {
+            String chosenTheme = appearance.findViewById(appearance.getCheckedRadioButtonId()).getTag().toString();
+            String chosenLanguage = language.findViewById(language.getCheckedRadioButtonId()).getTag().toString();
+            if (!getSharedPreferences("settings", 0).edit().putString("theme", chosenTheme)
+                    .putString("language", chosenLanguage).commit()) {
+                showError(new IOException(getString(R.string.settings_save_error))); return;
+            }
+            saveDraft();
+            dialog.dismiss();
+            if (!current.equals(chosenLanguage)) {
+                getSystemService(android.app.LocaleManager.class)
+                        .setApplicationLocales(android.os.LocaleList.forLanguageTags(chosenLanguage));
+            } else if (!selected.equals(chosenTheme)) recreate();
+        }));
+        showFull(dialog);
+    }
+
+    private View settingsButton() {
+        android.widget.ImageButton button = new android.widget.ImageButton(this);
+        button.setImageResource(android.R.drawable.ic_menu_preferences);
+        button.setImageTintList(ColorStateList.valueOf(INK));
+        button.setBackground(buttonSurface(CONTROL, 24));
+        button.setContentDescription(getString(R.string.settings));
+        button.setMinimumWidth(dp(48)); button.setMinimumHeight(dp(48));
+        button.setOnClickListener(view -> {
+            if (busy) showError(new IOException(getString(R.string.busy)));
+            else showSettings();
+        });
+        return button;
     }
 
     void openEditor() {
@@ -168,11 +242,14 @@ public final class MainActivity extends Activity {
     private void showTemplates() {
         editing = false;
         prepareScreen();
-        TextView heading = text(getString(R.string.templates), 32, Color.WHITE);
+        TextView heading = text(getString(R.string.templates), 32, INK);
         heading.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         heading.setMinHeight(dp(72));
         heading.setGravity(Gravity.CENTER_VERTICAL);
-        root.addView(heading, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout header = row();
+        header.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
+        header.addView(settingsButton(), new LinearLayout.LayoutParams(dp(48), dp(48)));
+        root.addView(header, new LinearLayout.LayoutParams(-1, -2));
         root.addView(text(getString(R.string.templates_help), 14, MUTED));
         Button create = button(R.string.new_theme, view -> {
             String tree = draft.tree;
@@ -181,7 +258,7 @@ public final class MainActivity extends Activity {
             saveDraft();
             openEditor();
         });
-        create.setTextColor(BG);
+        create.setTextColor(Color.BLACK);
         create.setBackground(buttonSurface(ACCENT, 28));
         root.addView(create);
         if (draft.hasUnsavedChanges(this)) {
@@ -226,7 +303,7 @@ public final class MainActivity extends Activity {
                         ImageView icon = new ImageView(MainActivity.this);
                         icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
                         item.addView(icon, new LinearLayout.LayoutParams(dp(48), dp(48)));
-                        TextView label = text("", 16, Color.WHITE);
+                        TextView label = text("", 16, INK);
                         label.setPadding(dp(16), 0, 0, 0);
                         item.addView(label, new LinearLayout.LayoutParams(0, -2, 1));
                         Button delete = button(R.string.delete_template, view -> {});
@@ -292,20 +369,21 @@ public final class MainActivity extends Activity {
     private void buildScreen() {
         prepareScreen();
         LinearLayout header = row();
-        TextView heading = text(getString(R.string.app_name), 24, Color.WHITE);
+        TextView heading = text(getString(R.string.app_name), 24, INK);
         heading.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         heading.setMinHeight(dp(64));
         heading.setGravity(Gravity.CENTER_VERTICAL);
         header.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
         Button reset = button(R.string.templates, view -> { saveDraft(); showTemplates(); });
         header.addView(reset, new LinearLayout.LayoutParams(-2, -2));
+        header.addView(settingsButton(), new LinearLayout.LayoutParams(dp(48), dp(48)));
         root.addView(header);
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout body = column();
         scroll.addView(body);
-        body.addView(text(getString(R.string.tagline), 28, Color.WHITE));
+        body.addView(text(getString(R.string.tagline), 28, INK));
         body.addView(text(getString(R.string.intro), 14, MUTED));
         LinearLayout packCard = card(body, R.string.pack);
         packList = column();
@@ -358,7 +436,7 @@ public final class MainActivity extends Activity {
         wallpaperRow.addView(wallpaperButtons, new LinearLayout.LayoutParams(0, -2, 1));
         wallpaper.addView(wallpaperRow);
         packCard = card(body, R.string.theme_options);
-        packCard.addView(text(getString(R.string.export_scope), 16, Color.WHITE));
+        packCard.addView(text(getString(R.string.export_scope), 16, INK));
         exportScope = new RadioGroup(this);
         RadioButton installedOnly = new RadioButton(this);
         installedOnly.setId(View.generateViewId());
@@ -373,7 +451,7 @@ public final class MainActivity extends Activity {
         });
         packCard.addView(exportScope);
         packCard.addView(text(getString(R.string.scope_help), 13, MUTED));
-        packCard.addView(text(getString(R.string.fallback_shape), 16, Color.WHITE));
+        packCard.addView(text(getString(R.string.fallback_shape), 16, INK));
         LinearLayout shapeRow = row();
         shapePreview = new ImageView(this);
         shapePreview.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -386,9 +464,9 @@ public final class MainActivity extends Activity {
         ArrayAdapter<String> shapeAdapter = new ArrayAdapter<>(this,
                 android.R.layout.simple_spinner_item, shapeNames) {
             private View label(int position, View convert, boolean dropdown) {
-                TextView label = convert instanceof TextView ? (TextView) convert : text("", 16, Color.WHITE);
+                TextView label = convert instanceof TextView ? (TextView) convert : text("", 16, INK);
                 label.setText(getItem(position));
-                label.setTextColor(Color.WHITE);
+                label.setTextColor(INK);
                 label.setBackgroundColor(dropdown ? PANEL : Color.TRANSPARENT);
                 label.setGravity(Gravity.CENTER_VERTICAL);
                 label.setPadding(dp(12), dp(12), dp(12), dp(12));
@@ -417,9 +495,32 @@ public final class MainActivity extends Activity {
         shapeRow.addView(shapes, new LinearLayout.LayoutParams(0, -2, 1));
         packCard.addView(shapeRow);
         packCard.addView(text(getString(R.string.fallback_shape_help), 13, MUTED));
+        packCard.addView(text(getString(R.string.overlay_title), 16, INK));
+        packCard.addView(text(getString(R.string.overlay_help), 13, MUTED));
+        LinearLayout overlayButtons = row();
+        overlayButtons.addView(button(R.string.choose_overlay, view -> openFile(OVERLAY_FILE, "image/png")),
+                new LinearLayout.LayoutParams(0, -2, 1));
+        removeOverlay = button(R.string.remove_overlay, view -> {
+            draft.overlay = ""; draft.overlayAll = false; saveDraft(); refresh();
+        });
+        LinearLayout.LayoutParams removeOverlayParams = new LinearLayout.LayoutParams(0, -2, 1);
+        removeOverlayParams.leftMargin = dp(6);
+        overlayButtons.addView(removeOverlay, removeOverlayParams);
+        packCard.addView(overlayButtons);
+        overlayScope = new RadioGroup(this);
+        for (int label : new int[]{R.string.overlay_fallback, R.string.overlay_all}) {
+            RadioButton option = new RadioButton(this);
+            option.setId(View.generateViewId()); option.setText(label);
+            overlayScope.addView(option);
+        }
+        overlayScope.check(overlayScope.getChildAt(draft.overlayAll ? 1 : 0).getId());
+        overlayScope.setOnCheckedChangeListener((group, id) -> {
+            draft.overlayAll = id == overlayScope.getChildAt(1).getId(); saveDraft(); refresh();
+        });
+        packCard.addView(overlayScope);
         CheckBox folderBackground = new CheckBox(this);
         folderBackground.setText(R.string.folder_background);
-        folderBackground.setTextColor(Color.WHITE);
+        folderBackground.setTextColor(INK);
         folderBackground.setChecked(draft.clearFolderBackground);
         folderBackground.setOnCheckedChangeListener((view, checked) -> {
             draft.clearFolderBackground = checked; saveDraft();
@@ -428,7 +529,7 @@ public final class MainActivity extends Activity {
         packCard.addView(text(getString(R.string.folder_background_help), 13, MUTED));
         LinearLayout appCard = card(body, R.string.apps);
         appCard.addView(text(getString(R.string.apps_help), 14, MUTED));
-        appInfo = text("", 14, ACCENT); appCard.addView(appInfo);
+        appInfo = text("", 14, ACCENT_TEXT); appCard.addView(appInfo);
         appCard.addView(button(R.string.apps, view -> {
             if (pack == null) showError(new IOException(getString(R.string.no_pack)));
             else showApps();
@@ -444,7 +545,7 @@ public final class MainActivity extends Activity {
             startActivityForResult(intent, DIRECTORY);
         });
         destination.addView(destinationButton);
-        destinationInfo = text("", 13, ACCENT); destination.addView(destinationInfo);
+        destinationInfo = text("", 13, ACCENT_TEXT); destination.addView(destinationInfo);
         templateHelp = text(getString(draft.templateId.isEmpty()
                 ? R.string.template_create_help : R.string.template_update_help), 13, MUTED);
         body.addView(templateHelp);
@@ -455,7 +556,7 @@ public final class MainActivity extends Activity {
         addDraftStatus();
         Button export = button(R.string.export, view -> export());
         exportButton = export;
-        export.setTextColor(BG); export.setBackground(buttonSurface(ACCENT, 28));
+        export.setTextColor(Color.BLACK); export.setBackground(buttonSurface(ACCENT, 28));
         export.setMinHeight(dp(56));
         root.addView(export, new LinearLayout.LayoutParams(-1, -2));
         refresh();
@@ -493,6 +594,11 @@ public final class MainActivity extends Activity {
         wallpaperButtons.requestLayout();
         discardCover.setVisibility(draft.coverPath.isEmpty() ? View.GONE : View.VISIBLE);
         autoCoverInfo.setVisibility(draft.coverPath.isEmpty() ? View.VISIBLE : View.GONE);
+        removeOverlay.setVisibility(draft.overlay.isEmpty() ? View.GONE : View.VISIBLE);
+        View chooseOverlay = ((ViewGroup) removeOverlay.getParent()).getChildAt(0);
+        ((ViewGroup.MarginLayoutParams) chooseOverlay.getLayoutParams()).rightMargin = draft.overlay.isEmpty() ? 0 : dp(6);
+        chooseOverlay.requestLayout();
+        overlayScope.setVisibility(draft.overlay.isEmpty() ? View.GONE : View.VISIBLE);
     }
 
     private void updateExportEnabled() {
@@ -507,7 +613,8 @@ public final class MainActivity extends Activity {
         List<IconRepository.App> candidates = apps.stream()
                 .filter(app -> currentPack == null || currentPack.automatic(app) == null).toList();
         IconShape shape = draft.shape;
-        String key = String.join(",", draft.packs) + ":" + shape;
+        String overlayReference = draft.overlay;
+        String key = String.join(",", draft.packs) + ":" + shape + ":" + overlayReference + ":" + draft.overlayAll;
         if (key.equals(shapePreview.getTag())) return;
         ImageView target = shapePreview;
         target.setTag(key);
@@ -532,6 +639,9 @@ public final class MainActivity extends Activity {
                     preview = shape.preview(source, currentPack == null ? IconShape.SIZE - 2 * IconShape.INSET
                             : currentPack.fallbackSize());
                 } finally { source.recycle(); }
+                Bitmap overlay = IconOverlay.load(this, overlayReference);
+                try { IconOverlay.draw(preview, overlay); }
+                finally { if (overlay != null) overlay.recycle(); }
                 runOnUiThread(() -> {
                     if (!isDestroyed() && key.equals(target.getTag())) {
                         target.setImageBitmap(preview);
@@ -556,8 +666,10 @@ public final class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
-        if (requestCode == ICON_FILE) {
-            if (pendingIconApp == null) { showError(new IOException("Выберите приложение для иконки заново.")); return; }
+        if (requestCode == OVERLAY_FILE) {
+            work(() -> IconOverlay.read(this, uri), this::previewOverlay);
+        } else if (requestCode == ICON_FILE) {
+            if (pendingIconApp == null) { showError(new IOException(App.text(R.string.choose_app_again))); return; }
             String appKey = pendingIconApp;
             Runnable changed = pendingIconChanged;
             work(() -> FileIcons.read(this, uri), image -> previewFileIcon(appKey, changed, image));
@@ -571,8 +683,9 @@ public final class MainActivity extends Activity {
                     FileOutputStream output = file.startWrite();
                     try {
                         if (!image.compress(Bitmap.CompressFormat.JPEG, 95, output)) {
-                            throw new IOException("Не удалось сохранить обои.");
+                            throw new IOException(App.text(R.string.wallpaper_save_error));
                         }
+
                         file.finishWrite(output);
                     } catch (Exception error) {
                         file.failWrite(output);
@@ -594,6 +707,35 @@ public final class MainActivity extends Activity {
                 return uri.toString();
             }, tree -> { draft.tree = tree; saveDraft(); refresh(); });
         }
+    }
+
+    private void previewOverlay(Bitmap overlay) {
+        Dialog dialog = fullDialog();
+        LinearLayout content = scrollingDialogLayout(dialog, getString(R.string.overlay_title));
+        content.addView(text(getString(R.string.overlay_help), 14, MUTED));
+        Bitmap source = IconShape.previewSource(getDrawable(R.drawable.app_icon));
+        Bitmap preview = draft.shape.preview(source);
+        source.recycle();
+        IconOverlay.draw(preview, overlay);
+        ImageView image = new ImageView(this);
+        image.setImageBitmap(preview);
+        image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        image.setContentDescription(getString(R.string.overlay_preview));
+        content.addView(image, new LinearLayout.LayoutParams(-1, dp(192)));
+        content.addView(button(R.string.use_overlay, view -> {
+            Bitmap copy = overlay.copy(Bitmap.Config.ARGB_8888, false);
+            dialog.dismiss();
+            work(() -> {
+                try { return FileIcons.save(this, copy); }
+                finally { copy.recycle(); }
+            }, reference -> { draft.overlay = reference; saveDraft(); refresh(); });
+        }));
+        overlayDialog = dialog;
+        dialog.setOnDismissListener(ignored -> {
+            preview.recycle(); overlay.recycle();
+            if (overlayDialog == dialog) overlayDialog = null;
+        });
+        showFull(dialog);
     }
 
     private void cropCover(Bitmap source) {
@@ -621,7 +763,7 @@ public final class MainActivity extends Activity {
                 File temporary = new File(getFilesDir(), "cover-new.jpg");
                 try {
                     try (var output = new FileOutputStream(temporary)) {
-                        if (!fitted.compress(Bitmap.CompressFormat.JPEG, 92, output)) throw new IOException("Не удалось сохранить обложку.");
+                        if (!fitted.compress(Bitmap.CompressFormat.JPEG, 92, output)) throw new IOException(App.text(R.string.cover_save_error));
                     }
                     java.nio.file.Files.move(temporary.toPath(), new File(getFilesDir(), "cover.jpg").toPath(),
                             java.nio.file.StandardCopyOption.REPLACE_EXISTING);
@@ -687,7 +829,7 @@ public final class MainActivity extends Activity {
                         ImageView icon = new ImageView(MainActivity.this);
                         icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
                         item.addView(icon, new LinearLayout.LayoutParams(dp(48), dp(48)));
-                        TextView label = text("", 17, Color.WHITE);
+                        TextView label = text("", 17, INK);
                         label.setPadding(dp(16), 0, 0, 0);
                         item.addView(label, new LinearLayout.LayoutParams(0, -2, 1));
                     } else item = (LinearLayout) convert;
@@ -770,7 +912,7 @@ public final class MainActivity extends Activity {
         badge.setScaleType(ImageView.ScaleType.FIT_CENTER);
         badge.setImageBitmap(member.badge);
         item.addView(badge, new LinearLayout.LayoutParams(dp(48), dp(48)));
-        TextView label = text(getString(R.string.pack_count, member.label, member.icons.size()), 15, ACCENT);
+        TextView label = text(getString(R.string.pack_count, member.label, member.icons.size()), 15, ACCENT_TEXT);
         label.setPadding(dp(12), 0, dp(8), 0);
         item.addView(label, new LinearLayout.LayoutParams(0, -2, 1));
         Button remove = button(R.string.remove_pack, view -> removePack(packList.indexOfChild(item)));
@@ -909,8 +1051,8 @@ public final class MainActivity extends Activity {
                     ImageView image = new ImageView(MainActivity.this);
                     item.addView(image, new LinearLayout.LayoutParams(dp(52), dp(52)));
                     LinearLayout labels = column(); labels.setPadding(dp(12), 0, 0, 0);
-                    labels.addView(text("", 16, Color.WHITE)); labels.addView(text("", 11, MUTED));
-                    labels.addView(text("", 12, ACCENT));
+                    labels.addView(text("", 16, INK)); labels.addView(text("", 11, MUTED));
+                    labels.addView(text("", 12, ACCENT_TEXT));
                     item.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
                 } else item = (LinearLayout) convert;
                 IconRepository.App app = filtered.get(position);
@@ -1156,7 +1298,7 @@ public final class MainActivity extends Activity {
         LinearLayout content = column();
         content.setPadding(dp(24), dp(24), dp(24), dp(24));
         content.setBackground(rounded(PANEL, 24));
-        content.addView(text(getString(R.string.file_icon_preview), 22, Color.WHITE));
+        content.addView(text(getString(R.string.file_icon_preview), 22, INK));
         content.addView(text(getString(R.string.file_icon_help), 14, MUTED));
         ImageView preview = new ImageView(this);
         preview.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -1228,7 +1370,7 @@ public final class MainActivity extends Activity {
                 Log.e("IconManager", "Не удалось показать " + name, error);
                 runOnUiThread(() -> {
                     if (!isDestroyed() && key.equals(view.getTag())) {
-                        view.setContentDescription("Ошибка ресурса: " + name);
+                        view.setContentDescription(App.text(R.string.resource_error) + name);
                         if (reportedImageErrors.add(key)) showError(error);
                     }
                 });
@@ -1241,7 +1383,7 @@ public final class MainActivity extends Activity {
             showError(new IOException(getString(R.string.required))); return;
         }
         String themeTitle = title.getText().toString().trim();
-        if (themeTitle.length() > 100) { title.setError("Не более 100 символов"); return; }
+        if (themeTitle.length() > 100) { title.setError(App.text(R.string.title_length_error)); return; }
         Uri tree = Uri.parse(draft.tree);
         exportTo(themeTitle, java.time.LocalDateTime.now(), tree);
     }
@@ -1262,16 +1404,17 @@ public final class MainActivity extends Activity {
             String outputTitle = ThemeEngine.availableThemeTitle(getContentResolver(), tree, themeTitle);
             String outputName = ThemeEngine.availableDatedFilename(getContentResolver(), tree, outputTitle, createdAt);
             apps = repository.apps();
-            Bitmap cover;
-            if (coverPath.isEmpty()) cover = ThemeEngine.cover(currentPack, apps, overrides);
-            else {
-                cover = BitmapFactory.decodeFile(new File(getFilesDir(), coverPath).getPath());
-                if (cover == null) throw new IOException("Обложка не читается. Выберите её заново.");
-            }
+            Bitmap cover = null;
+            Bitmap overlay = IconOverlay.load(this, snapshot.overlay);
             try {
+                if (coverPath.isEmpty()) cover = ThemeEngine.cover(currentPack, apps, overrides, snapshot.overlayAll ? overlay : null);
+                else {
+                    cover = BitmapFactory.decodeFile(new File(getFilesDir(), coverPath).getPath());
+                    if (cover == null) throw new IOException(App.text(R.string.cover_read_error));
+                }
                 ThemeEngine.Result result = ThemeEngine.export(this, outputTitle, outputName, fullPack, shape, clearFolderBackground, currentPack, apps, overrides,
                         cover, tree, null, snapshot.wallpaperPath.isEmpty() ? null
-                                : new File(getFilesDir(), snapshot.wallpaperPath), (done, total) -> {
+                                : new File(getFilesDir(), snapshot.wallpaperPath), overlay, snapshot.overlayAll, (done, total) -> {
                             if (done == 1 || done == total || done % 10 == 0) runOnUiThread(() -> {
                                 if (!isDestroyed()) {
                                     String message = done == total ? getString(R.string.export_finishing)
@@ -1283,10 +1426,10 @@ public final class MainActivity extends Activity {
                 try {
                     return new SavedExport(result, templates.save(snapshot, currentPack.label, asNew), outputTitle);
                 } catch (Exception error) {
-                    throw new IOException("Тема сохранена в Honor/Themes/" + outputName
-                            + ", но шаблон сохранить не удалось. Черновик сохранён; повторите экспорт.\n" + error.getMessage(), error);
+                    throw new IOException(App.text(R.string.saved_theme_prefix) + outputName
+                            + App.text(R.string.template_save_partial) + error.getMessage(), error);
                 }
-            } finally { cover.recycle(); }
+            } finally { if (cover != null) cover.recycle(); if (overlay != null) overlay.recycle(); }
         }, saved -> {
             draft.templateId = saved.template().id();
             saveDraft();
@@ -1315,7 +1458,7 @@ public final class MainActivity extends Activity {
             Intent intent = pm.getLaunchIntentForPackage(name);
             if (intent != null) return intent;
         }
-        throw new IOException("Приложение «Темы» HONOR не найдено. Откройте его вручную.");
+        throw new IOException(App.text(R.string.themes_not_found));
     }
 
     private void openThemes() {
@@ -1385,7 +1528,7 @@ public final class MainActivity extends Activity {
         ProgressBar spinner = new ProgressBar(this);
         spinner.setIndeterminateTintList(ColorStateList.valueOf(ACCENT));
         content.addView(spinner, new LinearLayout.LayoutParams(dp(48), dp(48)));
-        progressMessage = text(message, 17, Color.WHITE);
+        progressMessage = text(message, 17, INK);
         progressMessage.setGravity(Gravity.CENTER);
         progressMessage.setPadding(0, dp(20), 0, 0);
         content.addView(progressMessage);
@@ -1416,10 +1559,19 @@ public final class MainActivity extends Activity {
         errorDialog = new AlertDialog.Builder(this).setTitle(R.string.error_title).setMessage(message).show();
     }
     private Dialog fullDialog() { return new Dialog(this, R.style.AppTheme); }
+    private LinearLayout scrollingDialogLayout(Dialog dialog, String heading) {
+        LinearLayout layout = dialogLayout(dialog, heading);
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout content = column();
+        scroll.addView(content);
+        layout.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        return content;
+    }
+
     private LinearLayout dialogLayout(Dialog dialog, String heading) {
         LinearLayout layout = column(); layout.setPadding(dp(16), dp(12), dp(16), dp(12)); layout.setBackgroundColor(BG);
         LinearLayout bar = row();
-        TextView label = text(heading, 24, Color.WHITE);
+        TextView label = text(heading, 24, INK);
         label.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         label.setMinHeight(dp(56));
         label.setGravity(Gravity.CENTER_VERTICAL);
@@ -1451,7 +1603,7 @@ public final class MainActivity extends Activity {
     }
     private EditText edit(int hint, String value) {
         EditText view = new EditText(this); view.setHint(hint); view.setText(value);
-        view.setTextSize(16); view.setTextColor(Color.WHITE); view.setHintTextColor(MUTED);
+        view.setTextSize(16); view.setTextColor(INK); view.setHintTextColor(MUTED);
         view.setMinHeight(dp(56));
         view.setPadding(dp(16), dp(12), dp(16), dp(12));
         StateListDrawable background = new StateListDrawable();
@@ -1463,7 +1615,7 @@ public final class MainActivity extends Activity {
         return view;
     }
     private Button button(int label, View.OnClickListener action) {
-        Button view = new Button(this); view.setText(label); view.setAllCaps(false); view.setTextColor(ACCENT);
+        Button view = new Button(this); view.setText(label); view.setAllCaps(false); view.setTextColor(ACCENT_TEXT);
         view.setTextSize(14);
         view.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         view.setMinimumHeight(0);
@@ -1482,7 +1634,7 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2); params.topMargin = dp(16); params.bottomMargin = dp(2);
         parent.addView(panel, params);
         if (heading != 0) {
-            TextView label = text(getString(heading), 18, Color.WHITE);
+            TextView label = text(getString(heading), 18, INK);
             label.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL)); panel.addView(label);
         }
         return panel;
@@ -1506,6 +1658,7 @@ public final class MainActivity extends Activity {
     @Override protected void onSaveInstanceState(Bundle state) {
         super.onSaveInstanceState(state);
         state.putString("pendingIconApp", pendingIconApp);
+        state.putBoolean("editing", editing);
     }
     @Override protected void onStop() { saveDraft(); super.onStop(); }
     @Override protected void onDestroy() {
@@ -1517,6 +1670,8 @@ public final class MainActivity extends Activity {
         if (deleteDialog != null) deleteDialog.dismiss();
         if (progressDialog != null) progressDialog.dismiss();
         if (fileIconDialog != null) fileIconDialog.dismiss();
+        if (settingsDialog != null) settingsDialog.dismiss();
+        if (overlayDialog != null) overlayDialog.dismiss();
         worker.shutdown(); thumbnails.shutdown(); super.onDestroy();
     }
 }

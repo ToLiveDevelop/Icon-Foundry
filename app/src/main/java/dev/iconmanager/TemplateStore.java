@@ -38,7 +38,7 @@ final class TemplateStore {
     List<Entry> list() throws Exception {
         if (!file.getBaseFile().exists() && !new File(file.getBaseFile() + ".bak").exists()) return new ArrayList<>();
         JSONObject root = new JSONObject(new String(file.readFully(), StandardCharsets.UTF_8));
-        if (root.getInt("version") != 1) throw new IOException("Неизвестная версия хранилища шаблонов.");
+        if (root.getInt("version") != 1) throw new IOException(App.text(R.string.template_version_error));
         JSONArray values = root.getJSONArray("templates");
         List<Entry> entries = new ArrayList<>();
         for (int i = 0; i < values.length(); i++) {
@@ -56,7 +56,7 @@ final class TemplateStore {
         List<Entry> entries = list();
         String id = asNew || draft.templateId.isEmpty() ? UUID.randomUUID().toString() : draft.templateId;
         if (!asNew && !draft.templateId.isEmpty() && entries.stream().noneMatch(entry -> entry.id().equals(id))) {
-            throw new IOException("Открытый шаблон больше не существует. Сохраните как новый.");
+            throw new IOException(App.text(R.string.template_gone));
         }
         JSONObject settings = draft.toJson();
         settings.put("templateId", id).put("coverPath", "").put("wallpaperPath", "");
@@ -71,7 +71,7 @@ final class TemplateStore {
                     Base64.NO_WRAP);
         }
         JSONObject fileIcons = new JSONObject();
-        for (String reference : draft.overrides.values()) {
+        for (String reference : draft.fileReferences()) {
             if (FileIcons.isFile(reference) && !fileIcons.has(reference)) {
                 fileIcons.put(reference, Base64.encodeToString(FileIcons.bytes(context, reference), Base64.NO_WRAP));
             }
@@ -85,7 +85,7 @@ final class TemplateStore {
 
     void delete(String id) throws Exception {
         List<Entry> entries = list();
-        if (!entries.removeIf(entry -> entry.id().equals(id))) throw new IOException("Шаблон не найден.");
+        if (!entries.removeIf(entry -> entry.id().equals(id))) throw new IOException(App.text(R.string.template_not_found));
         write(entries);
     }
 
@@ -109,12 +109,12 @@ final class TemplateStore {
 
     Draft open(String id) throws Exception {
         Entry entry = list().stream().filter(item -> item.id().equals(id)).findFirst()
-                .orElseThrow(() -> new IOException("Шаблон не найден."));
+                .orElseThrow(() -> new IOException(App.text(R.string.template_not_found)));
         Draft draft = Draft.fromJson(entry.settings());
         draft.templateId = entry.id();
-        for (String reference : draft.overrides.values()) {
+        for (String reference : draft.fileReferences()) {
             if (FileIcons.isFile(reference)) {
-                if (!entry.fileIcons().has(reference)) throw new IOException("В шаблоне отсутствует иконка из файла.");
+                if (!entry.fileIcons().has(reference)) throw new IOException(App.text(R.string.template_icon_missing));
                 FileIcons.restore(context, reference, Base64.decode(entry.fileIcons().getString(reference), Base64.DEFAULT));
             }
         }

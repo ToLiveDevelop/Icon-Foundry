@@ -48,7 +48,7 @@ final class FileIcons {
 
     static String save(Context context, Bitmap bitmap) throws IOException {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
-        if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) throw new IOException("Не удалось сохранить иконку.");
+        if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) throw new IOException(App.text(R.string.icon_save_error));
         byte[] bytes = output.toByteArray();
         String reference = PREFIX + "i" + digest(bytes);
         restore(context, reference, bytes);
@@ -77,27 +77,27 @@ final class FileIcons {
     }
 
     static Bitmap render(File directory, String reference, int size) throws IOException {
-        if (directory == null) throw new IOException("Хранилище иконок из файлов недоступно.");
+        if (directory == null) throw new IOException(App.text(R.string.icon_storage_error));
         byte[] bytes = Files.readAllBytes(file(directory, reference).toPath());
         validate(reference, bytes);
         Bitmap source = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
-        if (source == null) throw new IOException("Иконка из файла не читается. Выберите её заново.");
+        if (source == null) throw new IOException(App.text(R.string.icon_read_error));
         try { return fit(source, size); }
         finally { source.recycle(); }
     }
 
     private static File file(File directory, String reference) throws IOException {
-        if (!reference.matches("fileicon:i[0-9a-f]{64}")) throw new IOException("Некорректная ссылка на иконку из файла.");
+        if (!reference.matches("fileicon:i[0-9a-f]{64}")) throw new IOException(App.text(R.string.icon_reference_error));
         return new File(directory, reference.substring(PREFIX.length()) + ".png");
     }
 
     private static void validate(String reference, byte[] bytes) throws IOException {
-        if (!reference.equals(PREFIX + "i" + digest(bytes))) throw new IOException("Повреждена сохранённая иконка из файла.");
+        if (!reference.equals(PREFIX + "i" + digest(bytes))) throw new IOException(App.text(R.string.icon_corrupt));
         BitmapFactory.Options options = new BitmapFactory.Options();
         options.inJustDecodeBounds = true;
         BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
         if (options.outWidth != IconShape.SIZE || options.outHeight != IconShape.SIZE
-                || !"image/png".equals(options.outMimeType)) throw new IOException("Некорректное изображение иконки.");
+                || !"image/png".equals(options.outMimeType)) throw new IOException(App.text(R.string.icon_image_invalid));
     }
 
     private static String digest(byte[] bytes) {

@@ -147,7 +147,7 @@ final class ThemeEngine {
             BitmapFactory.decodeByteArray(bytes.toByteArray(), 0, bytes.size(), options);
         }
         if (options.outWidth < 32 || options.outWidth > 1024 || options.outWidth != options.outHeight) {
-            throw new IOException("Недопустимый размер иконок в образце.");
+            throw new IOException(App.text(R.string.sample_size_error));
         }
         return options.outWidth;
     }
@@ -171,7 +171,7 @@ final class ThemeEngine {
     static String datedFilename(String title, LocalDateTime createdAt, int copy) {
         if (copy < 1) throw new IllegalArgumentException("copy");
         String base = title.strip().replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_").replaceAll("\\s+", " ");
-        if (base.isBlank()) throw new IllegalArgumentException("Укажите название темы.");
+        if (base.isBlank()) throw new IllegalArgumentException(App.text(R.string.title_required));
         base = base.replaceAll("^\\.+|[. ]+$", "_");
         String suffix = "_" + createdAt.format(DateTimeFormatter.ofPattern("uuuu-MM-dd_HH-mm-ss", Locale.ROOT))
                 + (copy > 1 ? "_" + copy : "") + ".hnt";
@@ -208,7 +208,7 @@ final class ThemeEngine {
             String name = datedFilename(title, createdAt, copy);
             if (!exists(resolver, tree, name)) return name;
         }
-        throw new IOException("Не удалось подобрать свободное имя файла темы.");
+        throw new IOException(App.text(R.string.filename_unavailable));
     }
 
     static String availableThemeTitle(ContentResolver resolver, Uri tree, String title) throws IOException {
@@ -226,7 +226,7 @@ final class ThemeEngine {
                     && versionedTitle(title, version).toLowerCase(Locale.ROOT).equals(name)) latest = version;
         }
         if (latest == 0) return title;
-        if (latest >= 9999) throw new IOException("Не удалось подобрать свободное название темы.");
+        if (latest >= 9999) throw new IOException(App.text(R.string.title_unavailable));
         return versionedTitle(title, latest + 1);
     }
 
@@ -245,7 +245,7 @@ final class ThemeEngine {
         try (Cursor cursor = resolver.query(children,
                 new String[]{DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_DOCUMENT_ID},
                 null, null, null)) {
-            if (cursor == null) throw new IOException("Не удалось прочитать каталог экспорта.");
+            if (cursor == null) throw new IOException(App.text(R.string.folder_read_error));
             while (cursor.moveToNext()) {
                 String name = cursor.getString(0);
                 if (name == null || !name.toLowerCase(Locale.ROOT).endsWith(".hnt")) continue;
@@ -281,11 +281,11 @@ final class ThemeEngine {
                 boolean root = false;
                 for (int event = parser.nextToken(); event != XmlPullParser.END_DOCUMENT;
                      event = parser.nextToken()) {
-                    if (event == XmlPullParser.DOCDECL) throw new IOException("Недопустимый XML темы.");
+                    if (event == XmlPullParser.DOCDECL) throw new IOException(App.text(R.string.theme_xml_invalid));
                     if (event == XmlPullParser.START_TAG) {
                         String tag = parser.getName();
                         if (!root) {
-                            if (!"HnTheme".equals(tag)) throw new IOException("Неизвестный формат метаданных темы.");
+                            if (!"HnTheme".equals(tag)) throw new IOException(App.text(R.string.theme_metadata_format));
                             root = true;
                         }
                         if ("title".equals(tag)) title = parser.nextText().trim();
@@ -297,7 +297,7 @@ final class ThemeEngine {
             }
         } catch (Exception error) {
             if (error instanceof IOException io) throw io;
-            throw new IOException("Не удалось прочитать метаданные темы.", error);
+            throw new IOException(App.text(R.string.theme_metadata_error), error);
         }
         return null;
     }
@@ -311,7 +311,7 @@ final class ThemeEngine {
         try (Cursor cursor = resolver.query(children,
                 new String[]{DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_DOCUMENT_ID},
                 null, null, null)) {
-            if (cursor == null) throw new IOException("Не удалось прочитать каталог экспорта.");
+            if (cursor == null) throw new IOException(App.text(R.string.folder_read_error));
             while (cursor.moveToNext()) {
                 if (filename.equalsIgnoreCase(cursor.getString(0))) {
                     return DocumentsContract.buildDocumentUriUsingTree(tree, cursor.getString(1));
@@ -361,8 +361,8 @@ final class ThemeEngine {
                     if (selected == null) continue;
                     String activity = app.component().getClassName();
                     if (classOwners.get(activity).size() > 1) {
-                        throw new IOException("Формат HONOR не различает общую activity " + activity
-                                + ". Назначьте одну иконку всем ярлыкам этого приложения.");
+                        throw new IOException(App.text(R.string.shared_activity_error) + activity
+                                + App.text(R.string.shared_activity_help));
                     }
                     addTarget(targets, activity, selected);
                 }
@@ -407,7 +407,7 @@ final class ThemeEngine {
         for (String key : overrides.keySet()) {
             if (known.contains(key)) continue;
             var component = IconRepository.component(key);
-            if (component == null) throw new IllegalArgumentException("Некорректное сохранённое приложение: " + key);
+            if (component == null) throw new IllegalArgumentException(App.text(R.string.saved_app_error) + key);
             result.add(new IconRepository.App(component, component.getPackageName()));
         }
         return result;
@@ -416,7 +416,7 @@ final class ThemeEngine {
     private static void addTarget(Map<String, String> targets, String name, String icon) throws IOException {
         String old = targets.putIfAbsent(name, icon);
         if (old != null && !old.equals(icon)) {
-            throw new IOException("Конфликт имён компонентов в формате HONOR: " + name);
+            throw new IOException(App.text(R.string.component_conflict) + name);
         }
     }
 
@@ -430,6 +430,14 @@ final class ThemeEngine {
     static Built build(Context context, String title, boolean fullPack, IconShape shape, boolean clearFolderBackground,
                        IconRepository.Pack pack, List<IconRepository.App> apps, Map<String, String> overrides,
                        Bitmap cover, File wallpaper, Progress progress) throws Exception {
+        return build(context, title, fullPack, shape, clearFolderBackground, pack, apps, overrides,
+                cover, wallpaper, null, false, progress);
+    }
+
+    static Built build(Context context, String title, boolean fullPack, IconShape shape, boolean clearFolderBackground,
+                       IconRepository.Pack pack, List<IconRepository.App> apps, Map<String, String> overrides,
+                       Bitmap cover, File wallpaper, Bitmap overlay, boolean overlayAll, Progress progress) throws Exception {
+        if (overlay != null) IconOverlay.validate(overlay);
         Map<String, String> targets = exportTargets(apps, pack, overrides, fullPack);
         int count = exportCount(apps, pack, overrides, fullPack);
         if (count == 0) throw new IOException(context.getString(R.string.empty_export));
@@ -443,9 +451,12 @@ final class ThemeEngine {
             try (ZipOutputStream zip = new ZipOutputStream(new FileOutputStream(nested))) {
                 int done = 0;
                 for (var target : targets.entrySet()) {
-                    if (!IconRepository.safeName(target.getKey())) throw new IOException("Некорректное имя компонента.");
+                    if (!IconRepository.safeName(target.getKey())) throw new IOException(App.text(R.string.component_name_error));
                     Bitmap icon = pack.render(target.getValue(), EXPORT_ICON_SIZE);
-                    try { put(zip, target.getKey() + ".png", png(icon)); }
+                    try {
+                        if (overlayAll) IconOverlay.draw(icon, overlay);
+                        put(zip, target.getKey() + ".png", png(icon));
+                    }
                     finally { icon.recycle(); }
                     progress.update(++done, targets.size());
                 }
@@ -454,6 +465,7 @@ final class ThemeEngine {
                     try { put(zip, "icon_mask.png", png(mask)); }
                     finally { mask.recycle(); }
                 }
+                if (overlay != null) put(zip, "icon_border.png", png(overlay));
             }
             try (ZipOutputStream zip = new ZipOutputStream(new FileOutputStream(result))) {
                 put(zip, "preview/", new byte[0]);
@@ -468,17 +480,17 @@ final class ThemeEngine {
                 try (InputStream input = new FileInputStream(nested)) { input.transferTo(zip); }
                 zip.closeEntry();
                 ByteArrayOutputStream jpeg = new ByteArrayOutputStream();
-                if (!cover.compress(Bitmap.CompressFormat.JPEG, 92, jpeg)) throw new IOException("Ошибка кодирования обложки.");
+                if (!cover.compress(Bitmap.CompressFormat.JPEG, 92, jpeg)) throw new IOException(App.text(R.string.cover_encoding_error));
                 put(zip, "preview/cover.jpg", jpeg.toByteArray());
                 put(zip, "preview/preview_icons_0.jpg", jpeg.toByteArray());
                 Bitmap small = Bitmap.createScaledBitmap(cover, 180, 320, true);
                 try {
                     ByteArrayOutputStream thumbnail = new ByteArrayOutputStream();
-                    if (!small.compress(Bitmap.CompressFormat.JPEG, 90, thumbnail)) throw new IOException("Ошибка миниатюры.");
+                    if (!small.compress(Bitmap.CompressFormat.JPEG, 90, thumbnail)) throw new IOException(App.text(R.string.thumbnail_encoding_error));
                     put(zip, "preview/icon_small.jpg", thumbnail.toByteArray());
                 } finally { if (small != cover) small.recycle(); }
             }
-            verifyArchive(result, targets.size(), shape, clearFolderBackground, maskSize, wallpaper != null);
+            verifyArchive(result, targets.size(), shape, clearFolderBackground, maskSize, wallpaper != null, overlay);
             complete = true;
             return new Built(result, count);
         } finally {
@@ -499,11 +511,20 @@ final class ThemeEngine {
                          boolean clearFolderBackground, IconRepository.Pack pack, List<IconRepository.App> apps,
                          Map<String, String> overrides, Bitmap cover, Uri tree, Uri replace,
                          File wallpaper, Progress progress) throws Exception {
+        return export(context, title, filename, fullPack, shape, clearFolderBackground, pack, apps, overrides,
+                cover, tree, replace, wallpaper, null, false, progress);
+    }
+
+    static Result export(Context context, String title, String filename, boolean fullPack, IconShape shape,
+                         boolean clearFolderBackground, IconRepository.Pack pack, List<IconRepository.App> apps,
+                         Map<String, String> overrides, Bitmap cover, Uri tree, Uri replace,
+                         File wallpaper, Bitmap overlay, boolean overlayAll, Progress progress) throws Exception {
         validateTree(context, tree);
         ContentResolver resolver = context.getContentResolver();
         Uri existing = findDocument(resolver, tree, filename);
         if (existing != null && !existing.equals(replace)) throw new IOException(context.getString(R.string.file_exists));
-        Built built = build(context, title, fullPack, shape, clearFolderBackground, pack, apps, overrides, cover, wallpaper, progress);
+        Built built = build(context, title, fullPack, shape, clearFolderBackground, pack, apps, overrides,
+                cover, wallpaper, overlay, overlayAll, progress);
         File result = built.file();
         Uri created = null;
         try {
@@ -515,7 +536,7 @@ final class ThemeEngine {
             }
             Uri parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree));
             created = DocumentsContract.createDocument(resolver, parent, "application/octet-stream", filename);
-            if (created == null) throw new IOException("Провайдер хранилища не создал файл.");
+            if (created == null) throw new IOException(App.text(R.string.document_create_error));
             if (!filename.equals(documentName(resolver, created))) throw new IOException(context.getString(R.string.file_exists));
             try (InputStream input = new FileInputStream(result);
                  OutputStream output = require(resolver.openOutputStream(created, "wt"))) {
@@ -524,14 +545,14 @@ final class ThemeEngine {
             byte[] expected;
             try (InputStream input = new FileInputStream(result)) { expected = digest(input); }
             try (InputStream input = require(resolver.openInputStream(created))) {
-                if (!MessageDigest.isEqual(expected, digest(input))) throw new IOException("Записанный файл не прошёл проверку целостности.");
+                if (!MessageDigest.isEqual(expected, digest(input))) throw new IOException(App.text(R.string.integrity_error));
             }
             return new Result(created, built.apps(), filename, clearFolderBackground);
         } catch (Exception error) {
             if (created != null) {
                 try {
                     if (!DocumentsContract.deleteDocument(resolver, created)) {
-                        error.addSuppressed(new IOException("Неполный файл не удалён: " + created));
+                        error.addSuppressed(new IOException(App.text(R.string.incomplete_file_error) + created));
                     }
                 } catch (Exception cleanup) {
                     error.addSuppressed(cleanup);
@@ -567,7 +588,7 @@ final class ThemeEngine {
                 try { writeVerified(resolver, uri, backup); }
                 catch (Exception restore) {
                     keepBackup = true;
-                    error.addSuppressed(new IOException("Не удалось восстановить исходную тему. Резервная копия: "
+                    error.addSuppressed(new IOException(App.text(R.string.theme_restore_error)
                             + backup.getAbsolutePath(), restore));
                 }
                 throw error;
@@ -581,7 +602,7 @@ final class ThemeEngine {
         try (InputStream input = new FileInputStream(file);
              InputStream written = require(resolver.openInputStream(uri))) {
             if (!MessageDigest.isEqual(digest(input), digest(written))) {
-                throw new IOException("Записанный файл не прошёл проверку целостности.");
+                throw new IOException(App.text(R.string.integrity_error));
             }
         }
     }
@@ -589,10 +610,10 @@ final class ThemeEngine {
     static String credits(List<String> packs) {
         String names = String.join(", ", packs.stream().map(label -> "«" + label + "»").toList());
         return packs.size() == 1
-                ? "На основе иконпака " + names + ". Права на иконки принадлежат разработчику иконпака. "
-                        + "Только для персонального использования."
-                : "На основе иконпаков " + names + ". Права на иконки принадлежат разработчикам иконпаков. "
-                        + "Только для персонального использования.";
+                ? App.text(R.string.credits_single_prefix) + names + App.text(R.string.credits_single_suffix)
+                        + App.text(R.string.personal_use)
+                : App.text(R.string.credits_multi_prefix) + names + App.text(R.string.credits_multi_suffix)
+                        + App.text(R.string.personal_use);
     }
 
     private static byte[] description(String title, List<String> packs) throws IOException {
@@ -689,6 +710,11 @@ final class ThemeEngine {
 
     static Bitmap cover(IconRepository.Pack pack, List<IconRepository.App> apps, Map<String, String> overrides)
             throws IOException {
+        return cover(pack, apps, overrides, null);
+    }
+
+    static Bitmap cover(IconRepository.Pack pack, List<IconRepository.App> apps, Map<String, String> overrides,
+                        Bitmap overlay) throws IOException {
         Bitmap bitmap = Bitmap.createBitmap(720, 1280, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
         canvas.drawColor(Color.BLACK);
@@ -704,8 +730,10 @@ final class ThemeEngine {
         try {
             for (String selected : coverIcons(pack, apps, overrides)) {
                 Bitmap icon = pack.render(selected, 140);
-                canvas.drawBitmap(icon, 60 + (index % 3) * 230, 290 + (index / 3) * 230, paint);
-                icon.recycle();
+                try {
+                    IconOverlay.draw(icon, overlay);
+                    canvas.drawBitmap(icon, 60 + (index % 3) * 230, 290 + (index / 3) * 230, paint);
+                } finally { icon.recycle(); }
                 index++;
             }
             return bitmap;
@@ -757,30 +785,35 @@ final class ThemeEngine {
 
     static void verifyArchive(File file, int targetCount, IconShape shape, boolean clearFolderBackground,
                               int maskSize, boolean wallpaper) throws IOException {
+        verifyArchive(file, targetCount, shape, clearFolderBackground, maskSize, wallpaper, null);
+    }
+
+    static void verifyArchive(File file, int targetCount, IconShape shape, boolean clearFolderBackground,
+                              int maskSize, boolean wallpaper, Bitmap overlay) throws IOException {
         try (ZipFile zip = new ZipFile(file)) {
             if (zip.size() != (clearFolderBackground ? 7 : 6) + (wallpaper ? 3 : 0)
                     || zip.getEntry("description.xml") == null || zip.getEntry("icons") == null
                     || zip.getEntry("preview/cover.jpg") == null || zip.getEntry("preview/preview_icons_0.jpg") == null
                     || zip.getEntry("preview/icon_small.jpg") == null || zip.getEntry("preview/") == null) {
-                throw new IOException("Неполный архив темы.");
+                throw new IOException(App.text(R.string.archive_incomplete));
             }
             if (wallpaper) {
                 ZipEntry home = zip.getEntry("wallpaper/home_wallpaper_0.jpg");
                 ZipEntry lock = zip.getEntry("wallpaper/unlock_wallpaper_0.jpg");
                 if (home == null || lock == null || zip.getEntry("wallpaper/") == null) {
-                    throw new IOException("В архиве отсутствуют выбранные обои.");
+                    throw new IOException(App.text(R.string.wallpaper_missing));
                 }
                 byte[] homeBytes, lockBytes;
                 try (InputStream input = zip.getInputStream(home)) { homeBytes = input.readAllBytes(); }
                 try (InputStream input = zip.getInputStream(lock)) { lockBytes = input.readAllBytes(); }
                 verifyWallpaper(homeBytes);
-                if (!java.util.Arrays.equals(homeBytes, lockBytes)) throw new IOException("Обои рабочего стола и блокировки различаются.");
+                if (!java.util.Arrays.equals(homeBytes, lockBytes)) throw new IOException(App.text(R.string.wallpaper_mismatch));
             } else if (zip.stream().anyMatch(entry -> entry.getName().startsWith("wallpaper/"))) {
-                throw new IOException("В архиве появились невыбранные обои.");
+                throw new IOException(App.text(R.string.wallpaper_unexpected));
             }
             ZipEntry launcher = zip.getEntry(LAUNCHER);
             if ((launcher != null) != clearFolderBackground) {
-                throw new IOException("Некорректная настройка фона миниатюр папки.");
+                throw new IOException(App.text(R.string.folder_setting_error));
             }
             if (launcher != null) {
                 try (InputStream input = zip.getInputStream(launcher);
@@ -789,30 +822,42 @@ final class ThemeEngine {
                     for (ZipEntry entry; (entry = module.getNextEntry()) != null;) {
                         if (!expected.remove(entry.getName()) || !FOLDER_COLORS.equals(
                                 new String(module.readNBytes(4096), java.nio.charset.StandardCharsets.UTF_8))) {
-                            throw new IOException("Некорректный модуль фона миниатюр папки.");
+                            throw new IOException(App.text(R.string.folder_module_error));
                         }
                     }
-                    if (!expected.isEmpty()) throw new IOException("Неполный модуль фона миниатюр папки.");
+                    if (!expected.isEmpty()) throw new IOException(App.text(R.string.folder_module_incomplete));
                 }
             }
             try (var nested = new java.util.zip.ZipInputStream(zip.getInputStream(zip.getEntry("icons")))) {
                 int count = 0;
                 boolean hasMask = false;
+                boolean hasOverlay = false;
                 byte[] buffer = new byte[8192];
                 for (ZipEntry entry; (entry = nested.getNextEntry()) != null;) {
                     String name = entry.getName();
+                    if (name.equals("icon_border.png")) {
+                        if (hasOverlay || overlay == null) throw new IOException(App.text(R.string.overlay_archive_error));
+                        byte[] bytes = nested.readNBytes(1024 * 1024);
+                        Bitmap actual = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                        if (actual == null) throw new IOException(App.text(R.string.overlay_archive_error));
+                        try {
+                            if (!actual.sameAs(overlay)) throw new IOException(App.text(R.string.overlay_archive_error));
+                        } finally { actual.recycle(); }
+                        hasOverlay = true;
+                        continue;
+                    }
                     if (name.equals("icon_mask.png")) {
-                        if (hasMask || shape == IconShape.NONE) throw new IOException("Неожиданная маска иконок.");
+                        if (hasMask || shape == IconShape.NONE) throw new IOException(App.text(R.string.mask_unexpected));
                         byte[] bytes = nested.readNBytes(1024 * 1024);
                         Bitmap mask = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
-                        if (mask == null) throw new IOException("Маска иконок не читается.");
+                        if (mask == null) throw new IOException(App.text(R.string.mask_read_error));
                         try {
                             if (mask.getWidth() != IconShape.SIZE || mask.getHeight() != IconShape.SIZE) {
-                                throw new IOException("Некорректный размер маски.");
+                                throw new IOException(App.text(R.string.mask_size_error));
                             }
                             Bitmap expected = shape.mask(maskSize);
                             try {
-                                if (!mask.sameAs(expected)) throw new IOException("Некорректная форма маски.");
+                                if (!mask.sameAs(expected)) throw new IOException(App.text(R.string.mask_shape_error));
                             } finally { expected.recycle(); }
                         } finally { mask.recycle(); }
                         hasMask = true;
@@ -820,13 +865,14 @@ final class ThemeEngine {
                     }
                     if (!name.endsWith(".png") || name.contains("/")
                             || !IconRepository.safeName(name.substring(0, name.length() - 4))) {
-                        throw new IOException("Недопустимый путь иконки: " + name);
+                        throw new IOException(App.text(R.string.icon_path_error) + name);
                     }
                     while (nested.read(buffer) != -1) { /* Validate CRC while streaming. */ }
                     count++;
                 }
-                if (count != targetCount) throw new IOException("Неполный архив иконок.");
-                if (hasMask != (shape != IconShape.NONE)) throw new IOException("В архиве отсутствует выбранная маска.");
+                if (count != targetCount) throw new IOException(App.text(R.string.icons_incomplete));
+                if (hasMask != (shape != IconShape.NONE)) throw new IOException(App.text(R.string.mask_missing));
+                if (hasOverlay != (overlay != null)) throw new IOException(App.text(R.string.overlay_archive_error));
             }
         }
     }
@@ -836,7 +882,7 @@ final class ThemeEngine {
         options.inJustDecodeBounds = true;
         BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
         if (options.outWidth < 1 || options.outHeight < 1 || !"image/jpeg".equals(options.outMimeType)) {
-            throw new IOException("Обои не читаются. Выберите изображение заново.");
+            throw new IOException(App.text(R.string.wallpaper_read_error));
         }
     }
 
@@ -844,19 +890,19 @@ final class ThemeEngine {
         if ("file".equals(uri.getScheme()) && uri.getPath() != null) return new File(uri.getPath()).getName();
         try (Cursor cursor = resolver.query(uri,
                 new String[]{DocumentsContract.Document.COLUMN_DISPLAY_NAME}, null, null, null)) {
-            if (cursor == null || !cursor.moveToFirst()) throw new IOException("Не удалось прочитать имя документа.");
+            if (cursor == null || !cursor.moveToFirst()) throw new IOException(App.text(R.string.document_name_error));
             return cursor.getString(0);
         }
     }
 
     private static IOException invalidTemplate(Context context) { return new IOException(context.getString(R.string.template_error)); }
     private static <T> T require(T object) throws IOException {
-        if (object == null) throw new IOException("Хранилище не открыло поток.");
+        if (object == null) throw new IOException(App.text(R.string.storage_stream_error));
         return object;
     }
     private static byte[] png(Bitmap bitmap) throws IOException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, bytes)) throw new IOException("Ошибка кодирования PNG.");
+        if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, bytes)) throw new IOException(App.text(R.string.png_encoding_error));
         return bytes.toByteArray();
     }
     private static void put(ZipOutputStream zip, String name, byte[] bytes) throws IOException {
@@ -873,7 +919,7 @@ final class ThemeEngine {
         long total = 0;
         for (int count; (count = input.read(buffer)) != -1;) {
             total += count;
-            if (total > limit) throw new IOException("Размер данных образца превышает допустимый предел.");
+            if (total > limit) throw new IOException(App.text(R.string.sample_limit_error));
             output.write(buffer, 0, count);
         }
     }

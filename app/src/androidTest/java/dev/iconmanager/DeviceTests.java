@@ -33,15 +33,25 @@ public final class DeviceTests extends Instrumentation {
 
     @Override public void onStart() {
         Bundle result = new Bundle();
+        int resultCode = -1;
+        android.content.SharedPreferences draftPreferences = getTargetContext().getSharedPreferences("draft", 0);
+        Map<String, ?> originalPreferences = draftPreferences.getAll();
         try {
             runChecks();
             result.putString("stream", "\nOK: " + checks + " checks passed\n");
-            finish(-1, result);
         } catch (Exception | AssertionError error) {
             android.util.Log.e("IconManagerTests", "Failure", error);
             result.putString("stream", "\nFAILED after " + checks + " checks: " + android.util.Log.getStackTraceString(error));
-            finish(0, result);
+            resultCode = 0;
+        } finally {
+            var edit = draftPreferences.edit().clear();
+            for (var entry : originalPreferences.entrySet()) edit.putString(entry.getKey(), (String) entry.getValue());
+            if (!edit.commit()) {
+                resultCode = 0;
+                result.putString("stream", "\nFAILED: could not restore draft preferences\n");
+            }
         }
+        finish(resultCode, result);
     }
 
     private void runChecks() throws Exception {
@@ -77,6 +87,12 @@ public final class DeviceTests extends Instrumentation {
                     && info.badge().getHeight() == 96, "Discovered pack has an application icon for picker");
         }
         IconRepository.Pack pack = repository.load(packName);
+        verifySettingsResources(context);
+        verifyOverlay(context, pack);
+        if ("true".equals(arguments.getString("settingsOverlayOnly"))) {
+            verifySettingsUi(context);
+            return;
+        }
         if (packs.stream().anyMatch(info -> info.packageName().equals("com.lknninex.mation"))) {
             IconRepository.Pack mation = repository.load("com.lknninex.mation");
             check(mation.icons.size() > 1000 && mation.mappings.size() > 1000 && !mation.icons.containsKey("an_icon"),
@@ -374,6 +390,300 @@ public final class DeviceTests extends Instrumentation {
             expectFailure(() -> ThemeEngine.inspect(context, Uri.fromFile(invalid)), "Unsupported theme rejected");
         } finally { Files.deleteIfExists(invalid.toPath()); }
         check(context.getCacheDir().listFiles((dir, name) -> name.startsWith("sample-")).length == 0, "Reference temporary files cleaned up");
+        verifySettingsUi(context);
+    }
+
+    private void verifySettingsUi(Context context) throws Exception {
+        android.app.Application application = (android.app.Application) context.getApplicationContext();
+        java.util.concurrent.atomic.AtomicReference<MainActivity> resumed = new java.util.concurrent.atomic.AtomicReference<>();
+        android.app.Application.ActivityLifecycleCallbacks callbacks = new android.app.Application.ActivityLifecycleCallbacks() {
+            @Override public void onActivityResumed(android.app.Activity activity) {
+                if (activity instanceof MainActivity main) resumed.set(main);
+            }
+            @Override public void onActivityCreated(android.app.Activity activity, Bundle state) {}
+            @Override public void onActivityStarted(android.app.Activity activity) {}
+            @Override public void onActivityPaused(android.app.Activity activity) {}
+            @Override public void onActivityStopped(android.app.Activity activity) {}
+            @Override public void onActivitySaveInstanceState(android.app.Activity activity, Bundle state) {}
+            @Override public void onActivityDestroyed(android.app.Activity activity) {}
+        };
+        var preferences = context.getSharedPreferences("settings", 0);
+        Map<String, ?> before = preferences.getAll();
+        android.app.LocaleManager locales = context.getSystemService(android.app.LocaleManager.class);
+        android.os.LocaleList previousLocales = locales.getApplicationLocales();
+        String originalDraft = context.getSharedPreferences("draft", 0).getString("json", "");
+        application.registerActivityLifecycleCallbacks(callbacks);
+        try {
+            MainActivity first = (MainActivity) startActivitySync(new android.content.Intent(context, MainActivity.class)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK));
+            waitForWork(first);
+            for (String mode : List.of("light", "dark", "system")) {
+                MainActivity current = resumed.get();
+                if (current == null) current = first;
+                MainActivity activity = current;
+                String beforeTheme = preferences.getString("theme", "system");
+                String desiredLanguage = mode.equals("dark") ? "ru" : "en";
+                boolean recreate = !beforeTheme.equals(mode)
+                        || !locales.getApplicationLocales().toLanguageTags().equals(desiredLanguage);
+                runOnMainChecked(() -> {
+                    if (mode.equals("dark")) activity.openEditor();
+                });
+                waitForWork(activity);
+                runOnMainChecked(() -> {
+                    try {
+                        var method = MainActivity.class.getDeclaredMethod("showSettings");
+                        method.setAccessible(true); method.invoke(activity);
+                    } catch (ReflectiveOperationException error) { throw new AssertionError(error); }
+                    android.app.Dialog dialog = (android.app.Dialog) field(activity, "settingsDialog");
+                    android.view.View decor = dialog.getWindow().getDecorView();
+                    int label = mode.equals("light") ? R.string.theme_light
+                            : mode.equals("dark") ? R.string.theme_dark : R.string.theme_system;
+                    findText(decor, activity.getString(label)).performClick();
+                    findText(decor, desiredLanguage.equals("ru") ? "Русский" : "English").performClick();
+                    resumed.set(null);
+                    findText(decor, activity.getString(R.string.apply_settings)).performClick();
+                });
+                long deadline = android.os.SystemClock.uptimeMillis() + 30000;
+                while (recreate && (resumed.get() == null || resumed.get() == activity)
+                        && android.os.SystemClock.uptimeMillis() < deadline) Thread.sleep(100);
+                MainActivity result = recreate ? resumed.get() : activity;
+                check(result != null && (!recreate || result != activity), "Settings recreate activity when needed");
+                waitForWork(result);
+                runOnMainChecked(() -> {
+                    check(result.getResources().getConfiguration().getLocales().get(0).getLanguage().equals(desiredLanguage),
+                            "Selected app language takes effect after recreation: " + desiredLanguage + " vs "
+                                    + result.getResources().getConfiguration().getLocales());
+                    check(App.text(R.string.settings).equals(result.getString(R.string.settings)),
+                            "Background errors and activity UI use the same selected language");
+                    boolean dark = (result.getResources().getConfiguration().uiMode
+                            & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                            == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+                    if (!mode.equals("system")) check(dark == mode.equals("dark"), "Appearance applies in the real activity");
+                    check((int) field(result, "INK") != (int) field(result, "BG"), "Foreground contrasts with background");
+                    if (mode.equals("dark")) check((boolean) field(result, "editing"),
+                            "Changing settings preserves the open draft editor");
+                });
+                if (mode.equals("dark")) verifyOverlayUi(result);
+            }
+        } finally {
+            runOnMainChecked(() -> {
+                MainActivity current = resumed.get();
+                if (current != null) current.finish();
+            });
+            var edit = preferences.edit().clear();
+            for (var entry : before.entrySet()) edit.putString(entry.getKey(), (String) entry.getValue());
+            edit.commit();
+            runOnMainSync(() -> locales.setApplicationLocales(previousLocales));
+            application.unregisterActivityLifecycleCallbacks(callbacks);
+            check(context.getSharedPreferences("draft", 0).getString("json", "").equals(originalDraft),
+                    "Settings changes preserve the user draft exactly");
+        }
+    }
+
+    private interface CheckedAction { void run() throws Exception; }
+
+    private void runOnMainChecked(CheckedAction action) {
+        java.util.concurrent.atomic.AtomicReference<Throwable> failed = new java.util.concurrent.atomic.AtomicReference<>();
+        runOnMainSync(() -> {
+            try { action.run(); }
+            catch (Throwable error) { failed.set(error); }
+        });
+        if (failed.get() != null) throw new AssertionError(failed.get());
+    }
+
+    private void verifyOverlayUi(MainActivity activity) throws Exception {
+        Draft original = (Draft) field(activity, "draft");
+        Draft isolated = Draft.fromJson(original.toJson());
+        isolated.overlay = ""; isolated.overlayAll = false;
+        java.util.Set<String> beforeFiles = new java.util.HashSet<>();
+        File directory = FileIcons.directory(activity);
+        File[] existing = directory.listFiles();
+        if (existing != null) for (File file : existing) beforeFiles.add(file.getName());
+        try {
+            runOnMainChecked(() -> {
+                setField(activity, "draft", isolated);
+                try {
+                    var build = MainActivity.class.getDeclaredMethod("buildScreen");
+                    build.setAccessible(true); build.invoke(activity);
+                    check(((android.view.View) field(activity, "overlayScope")).getVisibility() == android.view.View.GONE,
+                            "Overlay scope is hidden until an overlay is chosen");
+                    Bitmap overlay = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+                    android.graphics.Paint paint = new android.graphics.Paint();
+                    paint.setColor(0xFF16BA78);
+                    new android.graphics.Canvas(overlay).drawRect(0, 0, 192, 12, paint);
+                    var preview = MainActivity.class.getDeclaredMethod("previewOverlay", Bitmap.class);
+                    preview.setAccessible(true); preview.invoke(activity, overlay);
+                    android.app.Dialog dialog = (android.app.Dialog) field(activity, "overlayDialog");
+                    check(dialog.isShowing(), "Overlay import shows a confirmation preview");
+                    findText(dialog.getWindow().getDecorView(), activity.getString(R.string.use_overlay)).performClick();
+                } catch (ReflectiveOperationException error) { throw new AssertionError(error); }
+            });
+            waitForWork(activity);
+            runOnMainChecked(() -> {
+                check(FileIcons.isFile(isolated.overlay), "Confirmed overlay is copied into local file storage");
+                android.widget.RadioGroup scope = (android.widget.RadioGroup) field(activity, "overlayScope");
+                check(scope.getVisibility() == android.view.View.VISIBLE && !isolated.overlayAll,
+                        "Overlay defaults to fallback-only scope");
+                scope.getChildAt(1).performClick();
+                check(isolated.overlayAll && Draft.load(activity).overlayAll, "All-icons scope is persisted in draft");
+                ((android.view.View) field(activity, "removeOverlay")).performClick();
+                check(isolated.overlay.isEmpty() && !isolated.overlayAll && scope.getVisibility() == android.view.View.GONE,
+                        "Removing overlay clears its saved scope and controls");
+            });
+        } finally {
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "overlayDialog");
+                if (dialog != null) dialog.dismiss();
+                setField(activity, "draft", original);
+                try {
+                    original.save(activity);
+                    var build = MainActivity.class.getDeclaredMethod("buildScreen");
+                    build.setAccessible(true); build.invoke(activity);
+                } catch (Exception error) { throw new AssertionError(error); }
+            });
+            File[] files = directory.listFiles();
+            if (files != null) for (File file : files) {
+                if (!beforeFiles.contains(file.getName())) Files.deleteIfExists(file.toPath());
+            }
+        }
+    }
+
+    private void verifySettingsResources(Context context) {
+        check(App.initialLanguage(android.os.LocaleList.forLanguageTags("ru-RU,en-US")).equals("ru")
+                        && App.initialLanguage(android.os.LocaleList.forLanguageTags("en-GB")).equals("en")
+                        && App.initialLanguage(android.os.LocaleList.forLanguageTags("de-DE,ru-RU")).equals("ru")
+                        && App.initialLanguage(android.os.LocaleList.forLanguageTags("de-DE")).equals("en"),
+                "First-run language follows supported system language and falls back to English");
+        for (String code : List.of("en", "ru")) {
+            android.content.res.Configuration config = new android.content.res.Configuration(
+                    context.getResources().getConfiguration());
+            config.setLocales(android.os.LocaleList.forLanguageTags(code));
+            Context localized = context.createConfigurationContext(config);
+            check(localized.getString(R.string.settings).equals(code.equals("en") ? "Settings" : "Настройки"),
+                    "Settings have English and Russian translations");
+            check(!localized.getString(R.string.overlay_help).isBlank()
+                            && localized.getString(R.string.pack_limit, 10).contains("10"),
+                    "Overlay help and formatted translations resolve");
+        }
+        var preferences = getContext().getSharedPreferences("settings-check", 0);
+        Context isolated = new android.content.ContextWrapper(context) {
+            @Override public android.content.SharedPreferences getSharedPreferences(String name, int mode) {
+                return preferences;
+            }
+        };
+        try {
+            preferences.edit().clear().commit();
+            check(App.themed(isolated) == isolated, "Appearance defaults to follow system");
+            for (String mode : List.of("dark", "light")) {
+                preferences.edit().putString("theme", mode).commit();
+                Context themed = App.themed(isolated);
+                boolean night = (themed.getResources().getConfiguration().uiMode
+                        & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                        == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+                check(night == mode.equals("dark"), "Explicit appearance overrides system night mode");
+                android.view.ContextThemeWrapper wrapper = new android.view.ContextThemeWrapper(themed, R.style.AppTheme);
+                android.util.TypedValue value = new android.util.TypedValue();
+                wrapper.getTheme().resolveAttribute(android.R.attr.colorBackground, value, true);
+                check(value.data == (night ? android.graphics.Color.BLACK : android.graphics.Color.rgb(245, 245, 245)),
+                        "Light and dark resource palettes match requested appearance");
+            }
+        } finally { preferences.edit().clear().commit(); }
+    }
+
+    private void verifyOverlay(Context context, IconRepository.Pack pack) throws Exception {
+        File directory = new File(context.getCacheDir(), "overlay-check");
+        Files.createDirectories(directory.toPath());
+        Context isolated = new android.content.ContextWrapper(context) {
+            @Override public File getFilesDir() { return directory; }
+        };
+        Bitmap overlay = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas canvas = new android.graphics.Canvas(overlay);
+        android.graphics.Paint paint = new android.graphics.Paint();
+        paint.setColor(android.graphics.Color.RED);
+        canvas.drawRect(0, 0, 192, 12, paint);
+        paint.setColor(0x800000FF);
+        canvas.drawRect(80, 80, 112, 112, paint);
+        Bitmap cover = Bitmap.createBitmap(720, 1280, Bitmap.Config.ARGB_8888);
+        Bitmap opaque = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+        opaque.eraseColor(android.graphics.Color.RED);
+        Bitmap blank = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+        File previousDirectory = pack.fileIcons;
+        try {
+            expectFailure(() -> IconOverlay.validate(opaque), "Opaque overlay rejected");
+            expectFailure(() -> IconOverlay.validate(blank), "Invisible overlay rejected");
+            File source = new File(directory, "overlay.png");
+            try (FileOutputStream stream = new FileOutputStream(source)) {
+                overlay.compress(Bitmap.CompressFormat.PNG, 100, stream);
+            }
+            Bitmap imported = IconOverlay.read(isolated, Uri.fromFile(source));
+            try { check(imported.sameAs(overlay), "PNG overlay preserves alpha and pixels without clipping"); }
+            finally { imported.recycle(); }
+            File rectangle = new File(directory, "rectangle.png");
+            Bitmap wide = Bitmap.createBitmap(192, 96, Bitmap.Config.ARGB_8888);
+            try (FileOutputStream stream = new FileOutputStream(rectangle)) {
+                wide.compress(Bitmap.CompressFormat.PNG, 100, stream);
+            } finally { wide.recycle(); }
+            expectFailure(() -> IconOverlay.read(isolated, Uri.fromFile(rectangle)), "Non-square overlay rejected");
+            File jpeg = new File(directory, "overlay.jpg");
+            try (FileOutputStream stream = new FileOutputStream(jpeg)) {
+                opaque.compress(Bitmap.CompressFormat.JPEG, 95, stream);
+            }
+            expectFailure(() -> IconOverlay.read(isolated, Uri.fromFile(jpeg)), "Non-PNG overlay rejected");
+            String reference = FileIcons.save(isolated, overlay);
+            Draft draft = new Draft();
+            draft.packs.add(pack.packageName); draft.overlay = reference; draft.overlayAll = true;
+            Draft roundTrip = Draft.fromJson(draft.toJson());
+            check(roundTrip.overlay.equals(reference) && roundTrip.overlayAll, "Overlay and target scope round-trip");
+            check(!new Draft().toJson().has("overlay"), "No-overlay drafts preserve legacy fingerprints");
+            TemplateStore store = new TemplateStore(isolated);
+            TemplateStore.Entry saved = store.save(draft, pack.label, false);
+            check(saved.fileIcons().has(reference), "Template embeds overlay PNG bytes");
+            File cached = FileIcons.directory(isolated).listFiles()[0];
+            Files.delete(cached.toPath());
+            Draft restored = store.open(saved.id());
+            Bitmap restoredImage = IconOverlay.load(isolated, restored.overlay);
+            try { check(restoredImage.sameAs(overlay), "Template restores overlay after original file is removed"); }
+            finally { restoredImage.recycle(); }
+            IconRepository.App app = new IconRepository.App(new ComponentName("dev.test.overlay", "dev.test.overlay.Main"), "Overlay");
+            String chosen = pack.icons.keySet().iterator().next();
+            String fileIcon = FileIcons.save(isolated, opaque);
+            pack.fileIcons = FileIcons.directory(isolated);
+            for (boolean all : new boolean[]{false, true}) {
+                for (String icon : List.of(chosen, fileIcon)) {
+                    IconShape shape = icon.equals(chosen) ? IconShape.NONE : IconShape.CIRCLE;
+                    Map<String, String> overrides = Map.of(app.key(), icon);
+                    ThemeEngine.Built built = ThemeEngine.build(isolated, "Overlay check", false, shape, false,
+                            pack, List.of(app), overrides, cover, null, overlay, all, (done, total) -> {});
+                    try (ZipFile archive = new ZipFile(built.file());
+                         ZipInputStream icons = new ZipInputStream(archive.getInputStream(archive.getEntry("icons")))) {
+                        boolean found = false;
+                        for (ZipEntry entry; (entry = icons.getNextEntry()) != null;) {
+                            if (!entry.getName().equals(app.component().getPackageName() + ".png")) continue;
+                            byte[] bytes = icons.readAllBytes();
+                            Bitmap actual = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                            Bitmap expected = pack.render(icon, 192);
+                            try {
+                                if (all) IconOverlay.draw(expected, overlay);
+                                check(actual.sameAs(expected), "Overlay scope controls exported pack icon pixels exactly once");
+                            } finally { actual.recycle(); expected.recycle(); }
+                            found = true;
+                        }
+                        check(found, "Overlay archive includes requested icon");
+                        expectFailure(() -> ThemeEngine.verifyArchive(built.file(), 1, shape, false),
+                                "Archive validation rejects an unexpected border");
+                    } finally { Files.deleteIfExists(built.file().toPath()); }
+                }
+            }
+        } finally {
+            pack.fileIcons = previousDirectory;
+            overlay.recycle(); cover.recycle(); opaque.recycle(); blank.recycle();
+            File[] files = FileIcons.directory(isolated).listFiles();
+            if (files != null) for (File file : files) Files.deleteIfExists(file.toPath());
+            Files.deleteIfExists(FileIcons.directory(isolated).toPath());
+            File[] artifacts = directory.listFiles();
+            if (artifacts != null) for (File file : artifacts) Files.deleteIfExists(file.toPath());
+            Files.deleteIfExists(directory.toPath());
+        }
     }
 
     private void verifyFileIcons(Context context, IconRepository.Pack pack) throws Exception {
@@ -703,8 +1013,12 @@ public final class DeviceTests extends Instrumentation {
                 check(shown.wallpaperPath.isEmpty() == (((android.view.View) field(activity, "wallpaperPreview")).getVisibility()
                                 == android.view.View.GONE), "Wallpaper button spans full width without wallpaper");
                 android.widget.LinearLayout root = (android.widget.LinearLayout) field(activity, "root");
+                boolean night = (activity.getResources().getConfiguration().uiMode
+                        & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                        == android.content.res.Configuration.UI_MODE_NIGHT_YES;
                 check(((android.graphics.drawable.ColorDrawable) root.getBackground()).getColor()
-                        == android.graphics.Color.BLACK, "Main screen background is black");
+                        == (night ? android.graphics.Color.BLACK : android.graphics.Color.rgb(245, 245, 245)),
+                        "Main screen background follows the active appearance");
                 android.widget.CheckBox folder = (android.widget.CheckBox) findText(
                         root, activity.getString(R.string.folder_background));
                 check(folder != null && folder.isChecked() == ((Draft) field(activity, "draft")).clearFolderBackground,
@@ -727,7 +1041,7 @@ public final class DeviceTests extends Instrumentation {
                     check(entry instanceof android.widget.TextView && !(entry instanceof android.widget.CheckedTextView),
                             "Shape list uses plain rows without OEM checkmark overlays");
                     android.widget.TextView label = (android.widget.TextView) entry;
-                    check(label.getCurrentTextColor() == android.graphics.Color.WHITE
+                    check(label.getCurrentTextColor() == (night ? android.graphics.Color.WHITE : android.graphics.Color.rgb(32, 32, 32))
                             && label.getMinHeight() >= 56 * context.getResources().getDisplayMetrics().density - 1,
                             "Dropdown rows have readable labels and sufficient height");
                 }
