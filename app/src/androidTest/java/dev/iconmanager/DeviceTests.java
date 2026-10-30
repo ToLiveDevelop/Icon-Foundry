@@ -87,6 +87,7 @@ public final class DeviceTests extends Instrumentation {
                     && info.badge().getHeight() == 96, "Discovered pack has an application icon for picker");
         }
         IconRepository.Pack pack = repository.load(packName);
+        verifyShapeExamples(context, pack);
         verifySettingsResources(context);
         verifyOverlay(context, pack);
         if ("true".equals(arguments.getString("settingsOverlayOnly"))) {
@@ -480,7 +481,10 @@ public final class DeviceTests extends Instrumentation {
                     if (mode.equals("dark")) check((boolean) field(result, "editing"),
                             "Changing settings preserves the open draft editor");
                 });
-                if (mode.equals("dark")) verifyOverlayUi(result);
+                if (mode.equals("dark")) {
+                    verifyShapePickerUi(result);
+                    verifyOverlayUi(result);
+                }
             }
         } finally {
             runOnMainChecked(() -> {
@@ -506,6 +510,164 @@ public final class DeviceTests extends Instrumentation {
             catch (Throwable error) { failed.set(error); }
         });
         if (failed.get() != null) throw new AssertionError(failed.get());
+    }
+
+    private void verifyShapeExamples(Context context, IconRepository.Pack pack) throws Exception {
+        Bitmap expectedSoftSquare = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+        android.graphics.Path expectedPath = new android.graphics.Path();
+        expectedPath.addRoundRect(0, 0, 1, 1, .22f / 2, .22f / 2, android.graphics.Path.Direction.CW);
+        android.graphics.Matrix transform = new android.graphics.Matrix();
+        transform.setScale(176, 176);
+        transform.postTranslate(8, 8);
+        expectedPath.transform(transform);
+        android.graphics.Paint silhouette = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        silhouette.setColor(android.graphics.Color.BLACK);
+        new android.graphics.Canvas(expectedSoftSquare).drawPath(expectedPath, silhouette);
+        Bitmap actualSoftSquare = IconShape.SQUARE.mask(176);
+        try { check(actualSoftSquare.sameAs(expectedSoftSquare), "Soft square uses exactly half the rounded square corner radius"); }
+        finally { actualSoftSquare.recycle(); expectedSoftSquare.recycle(); }
+        IconRepository.Pack sparse = new IconRepository.Pack(pack.packageName, pack.label, pack.resources,
+                pack.badge, pack.manager);
+        List<IconRepository.App> apps = new ArrayList<>();
+        for (int i = 7; i >= 0; i--) {
+            String label = Character.toString('A' + i);
+            apps.add(new IconRepository.App(new ComponentName("dev.test." + label.toLowerCase(java.util.Locale.ROOT),
+                    "dev.test.Main"), label));
+        }
+        String icon = pack.icons.keySet().iterator().next();
+        sparse.icons.put(icon, pack.icons.get(icon));
+        List<String> alphabetical = List.of("A", "B", "C", "D", "E", "F");
+        var selected = ShapePreview.examples(apps, sparse, Map.of(), java.util.Locale.ENGLISH);
+        check(selected.size() == 6 && selected.stream().map(IconRepository.App::label).toList().equals(alphabetical),
+                "Shape preview selects exactly six unthemed apps alphabetically");
+        for (IconRepository.App app : apps) if (app.label().equals("A") || app.label().equals("C"))
+            sparse.mappings.put(app.key(), icon);
+        String manuallyAssigned = apps.stream().filter(app -> app.label().equals("E")).findFirst().orElseThrow().key();
+        selected = ShapePreview.examples(apps, sparse, Map.of(manuallyAssigned, icon), java.util.Locale.ENGLISH);
+        check(selected.stream().map(IconRepository.App::label).toList().equals(List.of("B", "D", "F", "G", "H", "A")),
+                "Preview prefers unthemed apps and fills remaining slots without duplicates");
+        for (IconRepository.App app : apps) sparse.mappings.put(app.key(), icon);
+        selected = ShapePreview.examples(apps, sparse, Map.of(), java.util.Locale.ENGLISH);
+        check(selected.stream().map(IconRepository.App::label).toList().equals(alphabetical),
+                "Fully themed apps still provide six alphabetical system icons");
+        check(ShapePreview.examples(apps.subList(0, 3), sparse, Map.of(), java.util.Locale.ENGLISH).size() == 3,
+                "Small app lists are not padded with duplicate icons");
+        List<IconRepository.App> actual = ShapePreview.examples(new IconRepository(context).apps(), pack, Map.of(),
+                java.util.Locale.ENGLISH);
+        File wallpaper = new File(context.getFilesDir(), "shape-preview-test.png");
+        Bitmap solid = Bitmap.createBitmap(120, 240, Bitmap.Config.ARGB_8888);
+        solid.eraseColor(android.graphics.Color.MAGENTA);
+        try {
+            try (FileOutputStream output = new FileOutputStream(wallpaper)) {
+                check(solid.compress(Bitmap.CompressFormat.PNG, 100, output), "Test preview wallpaper encoded");
+            }
+            try (ShapePreview scene = ShapePreview.load(context, actual, pack.fallbackSize(), wallpaper.getName(), "")) {
+                Bitmap rendered = scene.render(IconShape.HEART);
+                try {
+                    check(rendered.getWidth() == ShapePreview.WIDTH && rendered.getHeight() == ShapePreview.HEIGHT
+                                    && rendered.getPixel(0, 0) == android.graphics.Color.MAGENTA
+                                    && rendered.getPixel(719, 439) == android.graphics.Color.MAGENTA,
+                            "Six-icon scene uses template wallpaper with an edge-to-edge background");
+                } finally { rendered.recycle(); }
+            }
+            try (ShapePreview scene = ShapePreview.load(context, actual, pack.fallbackSize(), "", "")) {
+                Bitmap rendered = scene.render(IconShape.CIRCLE);
+                try {
+                    check(rendered.getPixel(0, 0) != rendered.getPixel(719, 439)
+                                    && android.graphics.Color.alpha(rendered.getPixel(0, 0)) == 255,
+                            "Missing template wallpaper uses an opaque preview-only gradient");
+                } finally { rendered.recycle(); }
+            }
+            expectFailure(() -> ShapePreview.load(context, actual, 176, "missing-preview-wallpaper.png", ""),
+                    "Missing selected wallpaper produces an explicit error, not a fallback");
+        } finally { solid.recycle(); Files.deleteIfExists(wallpaper.toPath()); }
+        for (IconShape shape : IconShape.values()) {
+            Draft draft = new Draft();
+            draft.shape = shape;
+            check(Draft.fromJson(draft.toJson()).shape == shape, "Every shape retains its stable template identifier");
+        }
+    }
+
+    private void verifyShapePickerUi(MainActivity activity) throws Exception {
+        Draft original = (Draft) field(activity, "draft");
+        Draft isolated = Draft.fromJson(original.toJson());
+        isolated.wallpaperPath = "";
+        isolated.shape = IconShape.ROUNDED_SQUARE;
+        String savedJson = activity.getSharedPreferences("draft", 0).getString("json", "");
+        var build = MainActivity.class.getDeclaredMethod("buildScreen");
+        build.setAccessible(true);
+        try {
+            runOnMainChecked(() -> {
+                setField(activity, "draft", isolated);
+                build.invoke(activity);
+                ((android.view.View) field(activity, "shapeButton")).performClick();
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "shapeDialog");
+                check(dialog != null && dialog.isShowing(), "Shape popup opens from the editor");
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "shapeDialog");
+                android.view.View decor = dialog.getWindow().getDecorView();
+                android.widget.ImageView scene = decor.findViewWithTag("shape-scene");
+                check(scene.getDrawable() instanceof android.graphics.drawable.BitmapDrawable,
+                        "Shape popup loads its six-icon wallpaper scene before enabling Apply");
+                check(Math.abs(scene.getWidth() * (float) ShapePreview.HEIGHT / ShapePreview.WIDTH - scene.getHeight()) <= 1,
+                        "Wallpaper scene preserves square icon proportions without stretching");
+                Bitmap initial = ((android.graphics.drawable.BitmapDrawable) scene.getDrawable()).getBitmap()
+                        .copy(Bitmap.Config.ARGB_8888, false);
+                try {
+                    check(decor.findViewWithTag(IconShape.ROUNDED_SQUARE).isSelected(),
+                            "Popup initially selects the saved shape");
+                    for (IconShape shape : IconShape.values()) {
+                        android.view.View tile = decor.findViewWithTag(shape);
+                        check(tile != null && tile.getContentDescription().equals(activity.getString(shape.label)),
+                                "Each exported shape has a labelled illustration tile");
+                        tile.performClick();
+                        check(tile.isSelected() && tile.getStateDescription().equals(activity.getString(R.string.option_selected)),
+                                "Shape tiles expose their selected state");
+                    }
+                    decor.findViewWithTag(IconShape.STAR).performClick();
+                    check(!initial.sameAs(((android.graphics.drawable.BitmapDrawable) scene.getDrawable()).getBitmap()),
+                            "Choosing a shape immediately updates icons on the preview background");
+                    check(isolated.shape == IconShape.ROUNDED_SQUARE
+                                    && activity.getSharedPreferences("draft", 0).getString("json", "").equals(savedJson),
+                            "Choosing preview shapes does not modify the draft before Apply");
+                    dialog.dismiss();
+                } finally { initial.recycle(); }
+                ((android.view.View) field(activity, "shapeButton")).performClick();
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "shapeDialog");
+                android.view.View decor = dialog.getWindow().getDecorView();
+                check(decor.findViewWithTag(IconShape.ROUNDED_SQUARE).isSelected(),
+                        "Cancelling the popup restores the original selection");
+                decor.findViewWithTag(IconShape.HEART).performClick();
+                android.view.View apply = findText(decor, activity.getString(R.string.apply_settings));
+                check(apply.isEnabled() && ((android.view.ViewGroup) apply.getParent()).getChildAt(1)
+                                instanceof android.widget.ScrollView,
+                        "Apply is enabled after loading and pinned outside the scrolling choices");
+                apply.performClick();
+                check(isolated.shape == IconShape.HEART && Draft.load(activity).shape == IconShape.HEART
+                                && !dialog.isShowing(), "Apply saves the chosen mask and closes the popup");
+                ((android.view.View) field(activity, "shapeButton")).performClick();
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "shapeDialog");
+                check(dialog.getWindow().getDecorView().findViewWithTag(IconShape.HEART).isSelected(),
+                        "Reopened popup selects the applied shape");
+                dialog.dismiss();
+            });
+        } finally {
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "shapeDialog");
+                if (dialog != null) dialog.dismiss();
+                setField(activity, "draft", original);
+                original.save(activity);
+                build.invoke(activity);
+            });
+        }
     }
 
     private void verifyOverlayUi(MainActivity activity) throws Exception {
@@ -1101,7 +1263,7 @@ public final class DeviceTests extends Instrumentation {
     }
 
     private void verifyShapes(Context context, IconRepository.Pack pack, IconRepository.App app, String icon) throws Exception {
-        java.util.Set<Integer> silhouettes = new java.util.HashSet<>();
+        List<int[]> silhouettes = new ArrayList<>();
         Bitmap cover = ThemeEngine.cover(pack, List.of(app), Map.of(app.key(), icon));
         try {
             for (IconShape shape : IconShape.values()) {
@@ -1138,13 +1300,16 @@ public final class DeviceTests extends Instrumentation {
                                                     && (x < inset || y < inset || x >= 192 - inset || y >= 192 - inset)) padding = false;
                                         }
                                     }
-                                    check(black && padding && area > 20000, "Mask is black silhouette with correct padding: " + shape
+                                    check(black && padding && area > pack.fallbackSize() * pack.fallbackSize() / 4,
+                                            "Mask is black silhouette with correct padding and substantial area: " + shape
                                             + " black=" + black + " padding=" + padding + " area=" + area);
                                     check(android.graphics.Color.alpha(actual.getPixel(96, 96)) == 255, "Mask centre is fully opaque");
-                                    check(silhouettes.add(java.util.Arrays.hashCode(pixels)), "Every selectable shape has different silhouette");
-                                    boolean roundCorner = shape != IconShape.SQUARE;
+                                    check(silhouettes.stream().noneMatch(previous -> java.util.Arrays.equals(previous, pixels)),
+                                            "Every selectable shape has different pixels: " + shape);
+                                    silhouettes.add(pixels);
                                     int inset = (192 - pack.fallbackSize()) / 2;
-                                    check((android.graphics.Color.alpha(actual.getPixel(inset + 1, inset + 1)) == 0) == roundCorner, "Mask corner geometry");
+                                    check(android.graphics.Color.alpha(actual.getPixel(inset + 1, inset + 1)) == 0,
+                                            "Mask corners retain their rounded or polygon silhouette");
                                 } else {
                                     Bitmap expected = pack.render(icon, 192);
                                     try { check(actual.sameAs(expected), "Pack icon pixels unchanged by fallback shape"); }
@@ -1228,7 +1393,7 @@ public final class DeviceTests extends Instrumentation {
                         root, activity.getString(R.string.folder_background));
                 check(folder != null && folder.isChecked() == ((Draft) field(activity, "draft")).clearFolderBackground,
                         "Folder background toggle reflects persisted setting");
-                android.widget.Spinner spinner = findShapePicker(activity.getWindow().getDecorView());
+                android.widget.Button shapePicker = (android.widget.Button) field(activity, "shapeButton");
                 android.widget.ImageView shapeImage = (android.widget.ImageView) field(activity, "shapePreview");
                 float previewDensity = context.getResources().getDisplayMetrics().density;
                 check(shapeImage.getScaleType() == android.widget.ImageView.ScaleType.FIT_CENTER
@@ -1237,19 +1402,10 @@ public final class DeviceTests extends Instrumentation {
                         && shapeImage.getPaddingRight() >= 8 * previewDensity - 1
                         && shapeImage.getPaddingBottom() >= 8 * previewDensity - 1,
                         "Shape preview preserves aspect ratio and safe margin on every edge without changing exported mask");
-                check(spinner != null, "Shape picker is wired into the real Activity");
-                check(spinner.getAdapter().getCount() == IconShape.values().length, "UI exposes all six shape options");
-                for (IconShape shape : IconShape.values()) {
-                    check(context.getString(shape.label).equals(spinner.getAdapter().getItem(shape.ordinal())),
-                            "Shape picker label matches exported enum value");
-                    android.view.View entry = spinner.getAdapter().getDropDownView(shape.ordinal(), null, spinner);
-                    check(entry instanceof android.widget.TextView && !(entry instanceof android.widget.CheckedTextView),
-                            "Shape list uses plain rows without OEM checkmark overlays");
-                    android.widget.TextView label = (android.widget.TextView) entry;
-                    check(label.getCurrentTextColor() == (night ? android.graphics.Color.WHITE : android.graphics.Color.rgb(32, 32, 32))
-                            && label.getMinHeight() >= 56 * context.getResources().getDisplayMetrics().density - 1,
-                            "Dropdown rows have readable labels and sufficient height");
-                }
+                check(shapePicker != null && shapePicker.getText().toString().contains(activity.getString(shown.shape.label)),
+                        "Shape picker button shows the currently saved shape");
+                check(findShapePicker(activity.getWindow().getDecorView()) == null,
+                        "Shape selection no longer uses a stock dropdown");
                 check(findText(activity.getWindow().getDecorView(), "Выбрать образец .hnt") == null,
                         "Sample selection removed from real screen");
                 android.widget.Button choose = (android.widget.Button) field(activity, "addPackButton");

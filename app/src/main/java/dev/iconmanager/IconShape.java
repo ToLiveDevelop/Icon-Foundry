@@ -16,11 +16,16 @@ enum IconShape {
     ROUNDED_SQUARE(R.string.shape_rounded_square),
     SQUIRCLE(R.string.shape_squircle),
     SQUARE(R.string.shape_square),
-    TEARDROP(R.string.shape_teardrop);
+    TEARDROP(R.string.shape_teardrop),
+    HEART(R.string.shape_heart),
+    STAR(R.string.shape_star),
+    HEXAGON(R.string.shape_hexagon),
+    PENTAGON(R.string.shape_pentagon);
 
     final int label;
     static final int SIZE = 192;
     static final int INSET = 10;
+    private static final float ROUND_RADIUS = .22f;
 
     IconShape(int label) { this.label = label; }
 
@@ -81,10 +86,39 @@ enum IconShape {
         Path path = new Path();
         switch (this) {
             case CIRCLE -> path.addCircle(.5f, .5f, .5f, Path.Direction.CW);
-            case ROUNDED_SQUARE -> path.addRoundRect(0, 0, 1, 1, .22f, .22f, Path.Direction.CW);
-            case SQUARE -> path.addRect(0, 0, 1, 1, Path.Direction.CW);
+            case ROUNDED_SQUARE -> path.addRoundRect(0, 0, 1, 1, ROUND_RADIUS, ROUND_RADIUS, Path.Direction.CW);
+            case SQUARE -> path.addRoundRect(0, 0, 1, 1, ROUND_RADIUS / 2, ROUND_RADIUS / 2, Path.Direction.CW);
             case TEARDROP -> path.addRoundRect(0, 0, 1, 1,
                     new float[]{.5f, .5f, .5f, .5f, .12f, .12f, .5f, .5f}, Path.Direction.CW);
+            case HEART -> {
+                path.moveTo(.5f, 1);
+                path.cubicTo(.40f, .94f, 0, .68f, 0, .32f);
+                path.cubicTo(0, .02f, .30f, -.08f, .5f, .16f);
+                path.cubicTo(.70f, -.08f, 1, .02f, 1, .32f);
+                path.cubicTo(1, .68f, .60f, .94f, .5f, 1);
+                path.close();
+            }
+            case STAR, HEXAGON, PENTAGON -> {
+                int vertices = this == HEXAGON ? 6 : this == PENTAGON ? 5 : 10;
+                float[] x = new float[vertices], y = new float[vertices];
+                for (int i = 0; i < vertices; i++) {
+                    double angle = -Math.PI / 2 + i * 2 * Math.PI / vertices;
+                    float radius = this == STAR && i % 2 != 0 ? .31f : .5f;
+                    x[i] = .5f + radius * (float) Math.cos(angle);
+                    y[i] = .5f + radius * (float) Math.sin(angle);
+                }
+                // Short quadratic turns soften polygon and star tips.
+                float corner = this == STAR ? .23f : .12f;
+                for (int i = 0; i < vertices; i++) {
+                    int previous = (i + vertices - 1) % vertices, next = (i + 1) % vertices;
+                    float startX = x[i] + (x[previous] - x[i]) * corner;
+                    float startY = y[i] + (y[previous] - y[i]) * corner;
+                    if (i == 0) path.moveTo(startX, startY); else path.lineTo(startX, startY);
+                    path.quadTo(x[i], y[i], x[i] + (x[next] - x[i]) * corner,
+                            y[i] + (y[next] - y[i]) * corner);
+                }
+                path.close();
+            }
             case SQUIRCLE -> {
                 for (int step = 0; step < 360; step++) {
                     double angle = step * Math.PI / 180;

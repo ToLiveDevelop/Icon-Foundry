@@ -40,9 +40,6 @@ import android.widget.ProgressBar;
 import android.widget.SeekBar;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
-import android.widget.Spinner;
-import android.widget.ArrayAdapter;
-import android.widget.AdapterView;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import java.io.File;
@@ -89,9 +86,10 @@ public final class MainActivity extends Activity {
     private String pendingIconApp;
     private Runnable pendingIconChanged;
     private Dialog fileIconDialog;
-    private Dialog settingsDialog, overlayDialog;
+    private Dialog settingsDialog, overlayDialog, shapeDialog;
     private RadioGroup exportScope;
     private ImageView shapePreview;
+    private Button shapeButton;
     private Button removeOverlay;
     private RadioGroup overlayScope;
     private OptionalSection coverSection, wallpaperSection, overlaySection;
@@ -568,41 +566,8 @@ public final class MainActivity extends Activity {
         shapePreview.setPadding(dp(8), dp(8), dp(8), dp(8));
         shapePreview.setCropToPadding(true);
         shapeRow.addView(shapePreview, new LinearLayout.LayoutParams(dp(64), dp(64)));
-        Spinner shapes = new Spinner(this, Spinner.MODE_DROPDOWN);
-        List<String> shapeNames = new ArrayList<>();
-        for (IconShape shape : IconShape.values()) shapeNames.add(getString(shape.label));
-        ArrayAdapter<String> shapeAdapter = new ArrayAdapter<>(this,
-                android.R.layout.simple_spinner_item, shapeNames) {
-            private View label(int position, View convert, boolean dropdown) {
-                TextView label = convert instanceof TextView ? (TextView) convert : text("", 16, INK);
-                label.setText(getItem(position));
-                label.setTextColor(INK);
-                label.setBackgroundColor(dropdown ? PANEL : Color.TRANSPARENT);
-                label.setGravity(Gravity.CENTER_VERTICAL);
-                label.setPadding(dp(12), dp(12), dp(12), dp(12));
-                label.setMinHeight(dp(56));
-                label.setMaxLines(2);
-                label.setCompoundDrawables(null, null, null, null);
-                return label;
-            }
-            @Override public View getView(int position, View convert, ViewGroup parent) {
-                return label(position, convert, false);
-            }
-            @Override public View getDropDownView(int position, View convert, ViewGroup parent) {
-                return label(position, convert, true);
-            }
-        };
-        shapes.setPopupBackgroundDrawable(rounded(PANEL, 8));
-        shapes.setAdapter(shapeAdapter);
-        shapes.setSelection(draft.shape.ordinal());
-        shapes.setContentDescription(getString(R.string.fallback_shape));
-        shapes.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                draft.shape = IconShape.values()[position]; saveDraft(); refresh();
-            }
-            @Override public void onNothingSelected(AdapterView<?> parent) {}
-        });
-        shapeRow.addView(shapes, new LinearLayout.LayoutParams(0, -2, 1));
+        shapeButton = button(R.string.choose_shape, view -> showShapePicker());
+        shapeRow.addView(shapeButton, new LinearLayout.LayoutParams(0, -2, 1));
         packCard.addView(shapeRow);
         packCard.addView(text(getString(R.string.fallback_shape_help), 13, MUTED));
         CheckBox folderBackground = new CheckBox(this);
@@ -663,6 +628,7 @@ public final class MainActivity extends Activity {
         }
         destinationInfo.setText(draft.tree.isEmpty() ? getString(R.string.no_destination) : "Honor/Themes");
         destinationButton.setText(draft.tree.isEmpty() ? R.string.choose_destination : R.string.change_destination);
+        shapeButton.setText(getString(R.string.current_shape, getString(draft.shape.label)));
         refreshShapePreview();
         updateExportEnabled();
         if (!draft.coverPath.isEmpty()) {
@@ -750,6 +716,156 @@ public final class MainActivity extends Activity {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).setType(mime)
                 .addCategory(Intent.CATEGORY_OPENABLE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         startActivityForResult(intent, code);
+    }
+
+    private void showShapePicker() {
+        Dialog dialog = fullDialog();
+        shapeDialog = dialog;
+        LinearLayout layout = dialogLayout(dialog, getString(R.string.choose_shape));
+        LinearLayout header = (LinearLayout) layout.getChildAt(0);
+        LinearLayout.LayoutParams backParams = new LinearLayout.LayoutParams(dp(48), dp(48));
+        backParams.setMarginEnd(dp(12));
+        header.addView(iconButton(R.drawable.ic_back, R.string.back, view -> dialog.dismiss()), 0, backParams);
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout content = column();
+        scroll.addView(content);
+        layout.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        FrameLayout stage = new FrameLayout(this) {
+            @Override protected void onMeasure(int widthSpec, int heightSpec) {
+                int height = Math.round(View.MeasureSpec.getSize(widthSpec)
+                        * (float) ShapePreview.HEIGHT / ShapePreview.WIDTH);
+                super.onMeasure(widthSpec, View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY));
+            }
+        };
+        stage.setBackground(rounded(CONTROL, 20));
+        stage.setClipToOutline(true);
+        ImageView preview = new ImageView(this);
+        preview.setTag("shape-scene");
+        preview.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        stage.addView(preview, new FrameLayout.LayoutParams(-1, -1));
+        ProgressBar loading = new ProgressBar(this);
+        loading.setIndeterminateTintList(ColorStateList.valueOf(ACCENT));
+        loading.setContentDescription(getString(R.string.loading));
+        stage.addView(loading, new FrameLayout.LayoutParams(dp(40), dp(40), Gravity.CENTER));
+        content.addView(stage, new LinearLayout.LayoutParams(-1, -2));
+        String wallpaperPath = draft.wallpaperPath, overlayReference = draft.overlay;
+        content.addView(text(getString(wallpaperPath.isEmpty()
+                ? R.string.shape_preview_gradient : R.string.shape_preview_wallpaper), 12, MUTED));
+        content.addView(text(getString(R.string.shape_preview_help), 13, MUTED));
+        IconShape[] selected = {draft.shape};
+        ShapePreview[] scene = new ShapePreview[1];
+        Bitmap[] displayed = new Bitmap[1];
+        List<Bitmap> silhouettes = new ArrayList<>();
+        List<View> choices = new ArrayList<>();
+        List<IconRepository.App> examples = ShapePreview.examples(apps, pack, Map.copyOf(draft.overrides),
+                getResources().getConfiguration().getLocales().get(0));
+        IconRepository.Pack currentPack = pack;
+        Runnable render = () -> {
+            for (View choice : choices) {
+                boolean active = choice.getTag() == selected[0];
+                choice.setSelected(active);
+                choice.setStateDescription(getString(active ? R.string.option_selected : R.string.option_not_selected));
+                GradientDrawable background = rounded(active ? CONTROL : Color.TRANSPARENT, 18);
+                if (active) background.setStroke(dp(2), ACCENT);
+                choice.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFC107),
+                        background, rounded(Color.WHITE, 18)));
+                choice.findViewWithTag("shape-check").setVisibility(active ? View.VISIBLE : View.GONE);
+            }
+            if (scene[0] == null) return;
+            Bitmap image = scene[0].render(selected[0]);
+            preview.setImageBitmap(image);
+            preview.setContentDescription(getString(R.string.shape_example, getString(selected[0].label),
+                    String.join(", ", examples.stream().map(IconRepository.App::label).toList())));
+            if (displayed[0] != null) displayed[0].recycle();
+            displayed[0] = image;
+        };
+        List<IconShape> shapes = List.of(IconShape.ROUNDED_SQUARE, IconShape.SQUIRCLE, IconShape.SQUARE, IconShape.CIRCLE,
+                IconShape.HEART, IconShape.STAR, IconShape.HEXAGON, IconShape.PENTAGON, IconShape.TEARDROP, IconShape.NONE);
+        LinearLayout options = card(content, R.string.fallback_shape);
+        LinearLayout line = null;
+        for (int i = 0; i < shapes.size(); i++) {
+            if (i % 4 == 0) {
+                line = row();
+                line.setGravity(Gravity.TOP);
+                options.addView(line);
+            }
+            IconShape shape = shapes.get(i);
+            LinearLayout choice = column();
+            choice.setTag(shape);
+            choice.setGravity(Gravity.CENTER_HORIZONTAL);
+            choice.setPadding(dp(4), dp(12), dp(4), dp(8));
+            choice.setMinimumHeight(dp(136));
+            choice.setFocusable(true);
+            choice.setContentDescription(getString(shape.label));
+            FrameLayout illustration = new FrameLayout(this);
+            ImageView silhouette = new ImageView(this);
+            Bitmap icon = shape == IconShape.NONE ? IconShape.previewSource(getDrawable(R.drawable.app_icon), false)
+                    : shape.mask(176);
+            silhouettes.add(icon);
+            silhouette.setImageBitmap(icon);
+            if (shape != IconShape.NONE) silhouette.setImageTintList(ColorStateList.valueOf(i < 4 ? 0xFFFF9B91 : 0xFFA3AEFF));
+            illustration.addView(silhouette, new FrameLayout.LayoutParams(-1, -1));
+            ImageView check = new ImageView(this);
+            check.setTag("shape-check");
+            check.setImageResource(R.drawable.ic_check);
+            check.setImageTintList(ColorStateList.valueOf(Color.WHITE));
+            illustration.addView(check, new FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER));
+            illustration.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+            choice.addView(illustration, new LinearLayout.LayoutParams(dp(56), dp(56)));
+            TextView label = text(getString(shape.label), 12, INK);
+            label.setGravity(Gravity.CENTER);
+            label.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            choice.addView(label, new LinearLayout.LayoutParams(-1, -2));
+            View.OnClickListener select = view -> { selected[0] = shape; render.run(); };
+            choice.setOnClickListener(select);
+            label.setOnClickListener(select);
+            line.addView(choice, new LinearLayout.LayoutParams(0, -2, 1));
+            choices.add(choice);
+        }
+        while (line.getChildCount() < 4) line.addView(new View(this), new LinearLayout.LayoutParams(0, 0, 1));
+        Button apply = button(R.string.apply_settings, view -> {
+            if (draft.shape != selected[0]) {
+                draft.shape = selected[0];
+                saveDraft();
+                refresh();
+            }
+            dialog.dismiss();
+        });
+        apply.setMinHeight(dp(56));
+        apply.setTextColor(Color.BLACK);
+        apply.setBackground(buttonSurface(ACCENT, 28));
+        apply.setEnabled(false);
+        layout.addView(apply, new LinearLayout.LayoutParams(-1, -2));
+        dialog.setOnDismissListener(ignored -> {
+            preview.setImageDrawable(null);
+            if (displayed[0] != null) displayed[0].recycle();
+            if (scene[0] != null) scene[0].close();
+            for (Bitmap icon : silhouettes) icon.recycle();
+            if (shapeDialog == dialog) shapeDialog = null;
+        });
+        render.run();
+        showFull(dialog);
+        thumbnails.execute(() -> {
+            try {
+                int visibleSize = currentPack == null ? IconShape.SIZE - 2 * IconShape.INSET : currentPack.fallbackSize();
+                ShapePreview loaded = ShapePreview.load(this, examples, visibleSize, wallpaperPath, overlayReference);
+                runOnUiThread(() -> {
+                    if (isDestroyed() || !dialog.isShowing()) { loaded.close(); return; }
+                    scene[0] = loaded;
+                    loading.setVisibility(View.GONE);
+                    render.run();
+                    apply.setEnabled(true);
+                });
+            } catch (IOException | RuntimeException error) {
+                Log.e("IconManager", "Shape preview failed", error);
+                runOnUiThread(() -> {
+                    if (!isDestroyed() && dialog.isShowing()) {
+                        loading.setVisibility(View.GONE);
+                        showError(error);
+                    }
+                });
+            }
+        });
     }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
