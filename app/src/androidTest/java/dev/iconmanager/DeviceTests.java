@@ -295,16 +295,19 @@ public final class DeviceTests extends Instrumentation {
                         "Icon-only theme includes catalogue thumbnail and explicit preview directory");
                 try (ZipInputStream icons = new ZipInputStream(zip.getInputStream(zip.getEntry("icons")))) {
                     int count = 0;
+                    boolean dimensions = true, paths = true;
                     for (ZipEntry entry; (entry = icons.getNextEntry()) != null;) {
                         byte[] bytes = icons.readAllBytes();
                         if (!entry.getName().endsWith(".png")) continue;
                         Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
-                        check(bitmap != null && bitmap.getWidth() == 192 && bitmap.getHeight() == 192, "Reference-compatible flat icon dimensions");
-                        check(!entry.getName().contains("/") && expected.containsKey(
-                                entry.getName().substring(0, entry.getName().length() - 4)), "Flat package/activity resource path");
+                        dimensions &= bitmap != null && bitmap.getWidth() == 192 && bitmap.getHeight() == 192;
+                        paths &= !entry.getName().contains("/") && expected.containsKey(
+                                entry.getName().substring(0, entry.getName().length() - 4));
                         count++;
-                        bitmap.recycle();
+                        if (bitmap != null) bitmap.recycle();
                     }
+                    check(dimensions, "Reference-compatible flat icon dimensions");
+                    check(paths, "Flat package/activity resource path");
                     check(count == expected.size(), "Every target has one flat PNG");
                 }
             }
@@ -344,14 +347,16 @@ public final class DeviceTests extends Instrumentation {
             try (ZipFile zip = new ZipFile(complete.file());
                  ZipInputStream icons = new ZipInputStream(zip.getInputStream(zip.getEntry("icons")))) {
                 java.util.Set<String> names = new java.util.HashSet<>();
+                boolean dimensions = true;
                 for (ZipEntry entry; (entry = icons.getNextEntry()) != null;) {
                     byte[] bytes = icons.readAllBytes();
                     if (entry.getName().equals("icon_mask.png")) continue;
                     names.add(entry.getName());
                     Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
-                    check(bitmap != null && bitmap.getWidth() == 192 && bitmap.getHeight() == 192, "Full-pack PNG dimensions");
-                    bitmap.recycle();
+                    dimensions &= bitmap != null && bitmap.getWidth() == 192 && bitmap.getHeight() == 192;
+                    if (bitmap != null) bitmap.recycle();
                 }
+                check(dimensions, "Full-pack PNG dimensions");
                 check(names.contains(futurePackage + ".png") && names.size() == fullTargets.size(),
                         "Full archive contains every intended target, including future install");
             }
@@ -826,16 +831,16 @@ public final class DeviceTests extends Instrumentation {
                 });
                 waitForThumbnails(activity);
                 Bitmap overlay = IconOverlay.load(activity, overlayReference);
+                IconRepository.Pack activePack = (IconRepository.Pack) field(activity, "pack");
                 Bitmap[] expected = {source.render(icon, 128), pack.render(fileReference, 128),
-                        IconShape.previewSource(activity.getPackageManager().getActivityIcon(app.component()), false)};
+                        draft.shape.preview(IconRepository.unthemedIcon(activity.getPackageManager(), app.component()),
+                                activePack.fallbackSize())};
                 try {
                     for (int i = 0; i < expected.length; i++) if (i == 2 || all) IconOverlay.draw(expected[i], overlay);
                     runOnMainChecked(() -> {
                         for (int i = 0; i < expected.length; i++) {
-                            Bitmap actual = i == 2 ? IconShape.previewSource(views[i].getDrawable(), false)
-                                    : ((android.graphics.drawable.BitmapDrawable) views[i].getDrawable()).getBitmap();
-                            try { check(actual.sameAs(expected[i]), "Preview pixels respect overlay scope/cache: " + mode + "/" + i); }
-                            finally { if (i == 2) actual.recycle(); }
+                            Bitmap actual = ((android.graphics.drawable.BitmapDrawable) views[i].getDrawable()).getBitmap();
+                            check(actual.sameAs(expected[i]), "Preview pixels respect shape, overlay scope and cache: " + mode + "/" + i);
                         }
                         Bitmap hidden = IconShape.previewSource(views[3].getDrawable(), false);
                         try { check(hidden.sameAs(placeholder[0]), "Hidden system icons keep their placeholder without an overlay"); }
@@ -847,6 +852,27 @@ public final class DeviceTests extends Instrumentation {
                     placeholder[0].recycle();
                 }
             }
+            IconShape previousShape = draft.shape;
+            String loopOverlay = draft.overlay;
+            try {
+                Bitmap[] byShape = new Bitmap[2];
+                IconShape[] compared = {IconShape.HEART, IconShape.SQUARE};
+                for (int s = 0; s < compared.length; s++) {
+                    int index = s;
+                    android.widget.ImageView[] view = new android.widget.ImageView[1];
+                    runOnMainChecked(() -> {
+                        draft.shape = compared[index]; draft.overlay = "";
+                        view[0] = new android.widget.ImageView(activity);
+                        bindSystem.invoke(activity, view[0], app);
+                    });
+                    waitForThumbnails(activity);
+                    runOnMainChecked(() -> byShape[index] = ((android.graphics.drawable.BitmapDrawable) view[0].getDrawable()).getBitmap());
+                }
+                check(!byShape[0].sameAs(byShape[1]), "System icons in the app list follow the selected template shape");
+                int corner = (IconShape.SIZE - ((IconRepository.Pack) field(activity, "pack")).fallbackSize()) / 2 + 2;
+                check(android.graphics.Color.alpha(byShape[1].getPixel(IconShape.SIZE / 2, corner)) == 255,
+                        "Square system icon is not clipped by the currently applied HONOR mask");
+            } finally { runOnMainChecked(() -> { draft.shape = previousShape; draft.overlay = loopOverlay; }); }
             android.widget.ImageView[] pickerImage = new android.widget.ImageView[1];
             MainActivity.IconChoice[] choice = new MainActivity.IconChoice[1];
             runOnMainChecked(() -> {

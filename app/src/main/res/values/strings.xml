@@ -79,7 +79,7 @@
     <string name="shape_circle">Circle</string>
     <string name="shape_rounded_square">Rounded square</string>
     <string name="shape_squircle">Squircle</string>
-    <string name="shape_square">Soft-corner square</string>
+    <string name="shape_square">Square</string>
     <string name="shape_teardrop">Teardrop</string>
     <string name="shape_heart">Heart</string>
     <string name="shape_star">Star</string>

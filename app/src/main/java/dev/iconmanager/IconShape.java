@@ -50,6 +50,12 @@ enum IconShape {
 
     Bitmap preview(Bitmap source) { return preview(source, SIZE - 2 * INSET); }
 
+    Bitmap preview(Drawable drawable, int visibleSize) {
+        Bitmap source = previewSource(drawable, this != NONE);
+        try { return preview(source, visibleSize); }
+        finally { source.recycle(); }
+    }
+
     Bitmap preview(Bitmap source, int visibleSize) {
         Bitmap result = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(result);

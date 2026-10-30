@@ -53,7 +53,7 @@ final class ShapePreview implements AutoCloseable {
         try {
             if (examples.isEmpty()) throw new IOException(context.getString(R.string.shape_no_apps));
             for (IconRepository.App app : examples) {
-                var icon = context.getPackageManager().getActivityIcon(app.component());
+                var icon = IconRepository.unthemedIcon(context.getPackageManager(), app.component());
                 preview.originals.add(IconShape.previewSource(icon, false));
                 preview.unmasked.add(IconShape.previewSource(icon, true));
                 preview.labels.add(app.label());

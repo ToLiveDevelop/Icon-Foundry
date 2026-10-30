@@ -33,6 +33,37 @@ final class IconRepository {
     }
     record Icon(String name, String category, int id) {}
 
+    /** Reads the launcher icon file from the app's own resources, before the applied HONOR theme masks it. */
+    static Drawable unthemedIcon(PackageManager manager, ComponentName component)
+            throws PackageManager.NameNotFoundException {
+        var info = manager.getActivityInfo(component, PackageManager.ComponentInfoFlags.of(0));
+        int resource = info.getIconResource();
+        if (resource != 0) {
+            try {
+                Resources resources = manager.getResourcesForApplication(info.applicationInfo);
+                int density = android.util.DisplayMetrics.DENSITY_XXXHIGH;
+                android.util.TypedValue value = new android.util.TypedValue();
+                resources.getValueForDensity(resource, density, value, true);
+                String file = value.string == null ? "" : value.string.toString();
+                // Resources.getDrawable returns HONOR's themed bitmap for launcher icons; the raw file does not.
+                if (file.endsWith(".xml")) {
+                    try (XmlResourceParser parser = resources.getAssets().openXmlResourceParser(value.assetCookie, file)) {
+                        Drawable icon = Drawable.createFromXml(resources, parser, null);
+                        if (icon != null) return icon;
+                    }
+                } else if (!file.isEmpty()) {
+                    try (InputStream input = resources.openRawResource(resource, value)) {
+                        Bitmap bitmap = android.graphics.BitmapFactory.decodeStream(input);
+                        if (bitmap != null) return new android.graphics.drawable.BitmapDrawable(resources, bitmap);
+                    }
+                }
+            } catch (Resources.NotFoundException | IOException | XmlPullParserException error) {
+                android.util.Log.w("IconManager", "Unthemed icon unavailable for " + component, error);
+            }
+        }
+        return manager.getActivityIcon(component);
+    }
+
     static final class Pack {
         final String packageName;
         final String label;

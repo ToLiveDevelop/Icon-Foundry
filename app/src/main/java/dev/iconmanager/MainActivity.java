@@ -680,7 +680,7 @@ public final class MainActivity extends Activity {
                 IconRepository.App example = null;
                 android.graphics.drawable.Drawable drawable = null;
                 for (IconRepository.App candidate : candidates) {
-                    var icon = getPackageManager().getActivityIcon(candidate.component());
+                    var icon = IconRepository.unthemedIcon(getPackageManager(), candidate.component());
                     if (drawable == null || icon instanceof android.graphics.drawable.AdaptiveIconDrawable) {
                         example = candidate;
                         drawable = icon;
@@ -1564,21 +1564,21 @@ public final class MainActivity extends Activity {
 
     private void bindSystemImage(ImageView view, IconRepository.App app) {
         String overlayReference = draft.overlay;
-        String key = "system:" + app.key() + ":overlay:" + overlayReference;
+        IconShape shape = draft.shape;
+        IconRepository.Pack currentPack = pack;
+        String key = "system:" + app.key() + ":shape:" + shape + ":" + String.join(",", draft.packs)
+                + ":overlay:" + overlayReference;
         view.setTag(key);
         view.setImageResource(R.drawable.app_icon);
         Bitmap cached = images.get(key);
         if (cached != null) { view.setImageBitmap(cached); return; }
         thumbnails.execute(() -> {
             try {
-                var icon = getPackageManager().getActivityIcon(app.component());
-                if (overlayReference.isEmpty()) {
-                    runOnUiThread(() -> { if (!isDestroyed() && key.equals(view.getTag())) view.setImageDrawable(icon); });
-                } else {
-                    Bitmap bitmap = withPreviewOverlay(IconShape.previewSource(icon, false), overlayReference);
-                    images.put(key, bitmap);
-                    runOnUiThread(() -> { if (!isDestroyed() && key.equals(view.getTag())) view.setImageBitmap(bitmap); });
-                }
+                var icon = IconRepository.unthemedIcon(getPackageManager(), app.component());
+                int visibleSize = currentPack == null ? IconShape.SIZE - 2 * IconShape.INSET : currentPack.fallbackSize();
+                Bitmap bitmap = withPreviewOverlay(shape.preview(icon, visibleSize), overlayReference);
+                images.put(key, bitmap);
+                runOnUiThread(() -> { if (!isDestroyed() && key.equals(view.getTag())) view.setImageBitmap(bitmap); });
             } catch (android.content.pm.PackageManager.NameNotFoundException ignored) {
                 // Apps that are not installed have no system icon; the placeholder stays.
             } catch (IOException | RuntimeException error) {
