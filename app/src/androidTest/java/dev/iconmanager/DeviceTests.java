@@ -438,10 +438,27 @@ public final class DeviceTests extends Instrumentation {
                     android.view.View decor = dialog.getWindow().getDecorView();
                     int label = mode.equals("light") ? R.string.theme_light
                             : mode.equals("dark") ? R.string.theme_dark : R.string.theme_system;
-                    findText(decor, activity.getString(label)).performClick();
-                    findText(decor, desiredLanguage.equals("ru") ? "Русский" : "English").performClick();
+                    android.widget.TextView themeChoice = findText(decor, activity.getString(label));
+                    check(!(themeChoice instanceof android.widget.RadioButton),
+                            "Settings use appearance tiles rather than stock radio buttons");
+                    themeChoice.performClick();
+                    android.view.View themeTile = (android.view.View) themeChoice.getParent();
+                    check(themeTile.isSelected() && themeTile.getStateDescription()
+                                    .equals(activity.getString(R.string.option_selected)),
+                            "Appearance tile exposes its selected state");
+                    android.widget.TextView languageChoice = findText(decor, desiredLanguage.equals("ru") ? "Русский" : "English");
+                    languageChoice.performClick();
+                    android.view.View languageRow = (android.view.View) languageChoice.getParent();
+                    check(languageRow.isSelected()
+                                    && languageRow.findViewWithTag("selection").getVisibility() == android.view.View.VISIBLE,
+                            "Selected language has a checkmark");
+                    android.view.View apply = findText(decor, activity.getString(R.string.apply_settings));
+                    android.view.ViewGroup settingsLayout = (android.view.ViewGroup) apply.getParent();
+                    check(settingsLayout.getChildAt(1) instanceof android.widget.ScrollView
+                                    && settingsLayout.indexOfChild(apply) > 1,
+                            "Apply action is outside the scrollable choices");
                     resumed.set(null);
-                    findText(decor, activity.getString(R.string.apply_settings)).performClick();
+                    apply.performClick();
                 });
                 long deadline = android.os.SystemClock.uptimeMillis() + 30000;
                 while (recreate && (resumed.get() == null || resumed.get() == activity)
@@ -495,6 +512,7 @@ public final class DeviceTests extends Instrumentation {
         Draft original = (Draft) field(activity, "draft");
         Draft isolated = Draft.fromJson(original.toJson());
         isolated.overlay = ""; isolated.overlayAll = false;
+        isolated.coverPath = ""; isolated.wallpaperPath = "";
         java.util.Set<String> beforeFiles = new java.util.HashSet<>();
         File directory = FileIcons.directory(activity);
         File[] existing = directory.listFiles();
@@ -505,6 +523,31 @@ public final class DeviceTests extends Instrumentation {
                 try {
                     var build = MainActivity.class.getDeclaredMethod("buildScreen");
                     build.setAccessible(true); build.invoke(activity);
+                    String unchanged = isolated.toJson().toString();
+                    for (String section : List.of("coverSection", "wallpaperSection", "overlaySection")) {
+                        Object optional = field(activity, section);
+                        android.view.View content = (android.view.View) field(optional, "content");
+                        android.view.View toggle = (android.view.View) field(optional, "toggle");
+                        check(content.getVisibility() == android.view.View.GONE,
+                                "Empty optional section starts collapsed: " + section);
+                        toggle.performClick();
+                        check(content.getVisibility() == android.view.View.VISIBLE
+                                        && toggle.getStateDescription().equals(activity.getString(R.string.section_expanded)),
+                                "Optional section expands with accessible state: " + section);
+                        var refresh = MainActivity.class.getDeclaredMethod("refresh");
+                        refresh.setAccessible(true); refresh.invoke(activity);
+                        check(content.getVisibility() == android.view.View.VISIBLE,
+                                "Refreshing does not collapse an opened empty section: " + section);
+                        toggle.performClick();
+                    }
+                    check(isolated.toJson().toString().equals(unchanged),
+                            "Expanding and collapsing sections does not change template data");
+                    android.view.View header = ((android.view.ViewGroup) field(activity, "root")).getChildAt(0);
+                    android.view.View settings = ((android.view.ViewGroup) header)
+                            .getChildAt(((android.view.ViewGroup) header).getChildCount() - 1);
+                    var settingsParams = (android.widget.LinearLayout.LayoutParams) settings.getLayoutParams();
+                    check(settingsParams.getMarginStart() >= Math.round(12 * activity.getResources().getDisplayMetrics().density),
+                            "Settings button has at least 12dp spacing from Templates");
                     check(((android.view.View) field(activity, "overlayScope")).getVisibility() == android.view.View.GONE,
                             "Overlay scope is hidden until an overlay is chosen");
                     Bitmap overlay = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
@@ -521,6 +564,19 @@ public final class DeviceTests extends Instrumentation {
             waitForWork(activity);
             runOnMainChecked(() -> {
                 check(FileIcons.isFile(isolated.overlay), "Confirmed overlay is copied into local file storage");
+                check(((android.view.View) field(field(activity, "overlaySection"), "content")).getVisibility()
+                                == android.view.View.VISIBLE,
+                        "Selecting an overlay expands its section");
+                String imagePath = "file-icons/" + isolated.overlay.substring("fileicon:".length()) + ".png";
+                isolated.coverPath = imagePath; isolated.wallpaperPath = imagePath;
+                var build = MainActivity.class.getDeclaredMethod("buildScreen");
+                build.setAccessible(true); build.invoke(activity);
+                for (String section : List.of("coverSection", "wallpaperSection", "overlaySection")) {
+                    check(((android.view.View) field(field(activity, section), "content")).getVisibility()
+                                    == android.view.View.VISIBLE,
+                            "Populated optional section reopens expanded: " + section);
+                }
+                isolated.coverPath = ""; isolated.wallpaperPath = "";
                 android.widget.RadioGroup scope = (android.widget.RadioGroup) field(activity, "overlayScope");
                 check(scope.getVisibility() == android.view.View.VISIBLE && !isolated.overlayAll,
                         "Overlay defaults to fallback-only scope");
@@ -529,6 +585,12 @@ public final class DeviceTests extends Instrumentation {
                 ((android.view.View) field(activity, "removeOverlay")).performClick();
                 check(isolated.overlay.isEmpty() && !isolated.overlayAll && scope.getVisibility() == android.view.View.GONE,
                         "Removing overlay clears its saved scope and controls");
+                build.invoke(activity);
+                for (String section : List.of("coverSection", "wallpaperSection", "overlaySection")) {
+                    check(((android.view.View) field(field(activity, section), "content")).getVisibility()
+                                    == android.view.View.GONE,
+                            "Cleared optional section reopens collapsed: " + section);
+                }
             });
         } finally {
             runOnMainChecked(() -> {

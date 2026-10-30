@@ -94,6 +94,7 @@ public final class MainActivity extends Activity {
     private ImageView shapePreview;
     private Button removeOverlay;
     private RadioGroup overlayScope;
+    private OptionalSection coverSection, wallpaperSection, overlaySection;
     private boolean busy;
     private boolean editing;
     private TemplateStore templates;
@@ -134,60 +135,141 @@ public final class MainActivity extends Activity {
     private void showSettings() {
         Dialog dialog = fullDialog();
         settingsDialog = dialog;
-        LinearLayout content = scrollingDialogLayout(dialog, getString(R.string.settings));
-        content.addView(text(getString(R.string.appearance), 18, INK));
+        LinearLayout layout = dialogLayout(dialog, getString(R.string.settings));
+        LinearLayout header = (LinearLayout) layout.getChildAt(0);
+        android.widget.ImageButton back = iconButton(R.drawable.ic_back, R.string.back, view -> dialog.dismiss());
+        LinearLayout.LayoutParams backParams = new LinearLayout.LayoutParams(dp(48), dp(48));
+        backParams.setMarginEnd(dp(12));
+        header.addView(back, 0, backParams);
+        ScrollView scroll = new ScrollView(this);
+        scroll.setClipToPadding(false);
+        LinearLayout content = column();
+        scroll.addView(content);
+        layout.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout appearance = card(content, R.string.appearance);
+        LinearLayout themeRow = row();
+        appearance.addView(themeRow);
         String[] themes = {"system", "dark", "light"};
-        RadioGroup appearance = new RadioGroup(this);
         int[] labels = {R.string.theme_system, R.string.theme_dark, R.string.theme_light};
+        int[] icons = {R.drawable.ic_theme_system, R.drawable.ic_theme_dark, R.drawable.ic_theme_light};
         String selected = getSharedPreferences("settings", 0).getString("theme", "system");
+        String[] chosenTheme = {selected};
+        List<View> themeChoices = new ArrayList<>();
         for (int i = 0; i < themes.length; i++) {
-            RadioButton option = new RadioButton(this);
-            option.setId(View.generateViewId());
-            option.setText(labels[i]); option.setTag(themes[i]);
-            appearance.addView(option);
-            if (themes[i].equals(selected)) appearance.check(option.getId());
+            String value = themes[i];
+            LinearLayout option = column();
+            option.setTag(value);
+            option.setGravity(Gravity.CENTER);
+            option.setPadding(dp(6), dp(16), dp(6), dp(12));
+            option.setMinimumHeight(dp(124));
+            ImageView image = new ImageView(this);
+            image.setImageResource(icons[i]);
+            image.setImageTintList(ColorStateList.valueOf(INK));
+            image.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            option.addView(image, new LinearLayout.LayoutParams(dp(32), dp(32)));
+            TextView label = text(getString(labels[i]), 14, INK);
+            label.setGravity(Gravity.CENTER);
+            label.setMinHeight(dp(48));
+            label.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            option.addView(label, new LinearLayout.LayoutParams(-1, -2));
+            View.OnClickListener choose = view -> { chosenTheme[0] = value; selectSetting(themeChoices, value); };
+            option.setOnClickListener(choose);
+            label.setOnClickListener(choose);
+            option.setFocusable(true);
+            option.setContentDescription(getString(labels[i]));
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -2, 1);
+            if (i > 0) params.setMarginStart(dp(8));
+            themeRow.addView(option, params);
+            themeChoices.add(option);
         }
-        content.addView(appearance);
-        content.addView(text(getString(R.string.language), 18, INK));
-        RadioGroup language = new RadioGroup(this);
+        selectSetting(themeChoices, chosenTheme[0]);
+        LinearLayout language = card(content, R.string.language);
         String current = getSystemService(android.app.LocaleManager.class).getApplicationLocales().toLanguageTags();
+        String[] chosenLanguage = {current.startsWith("ru") ? "ru" : "en"};
+        List<View> languageChoices = new ArrayList<>();
         for (String code : new String[]{"en", "ru"}) {
-            RadioButton option = new RadioButton(this);
-            option.setId(View.generateViewId());
-            option.setText(code.equals("ru") ? "Русский" : "English"); option.setTag(code);
-            language.addView(option);
-            if (current.startsWith(code)) language.check(option.getId());
+            String name = code.equals("ru") ? "Русский" : "English";
+            LinearLayout option = row();
+            option.setTag(code);
+            option.setPadding(dp(16), dp(12), dp(16), dp(12));
+            option.setMinimumHeight(dp(72));
+            TextView badge = text(code.toUpperCase(Locale.ROOT), 13, MUTED);
+            badge.setGravity(Gravity.CENTER);
+            badge.setBackground(rounded(PANEL, 12));
+            badge.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            option.addView(badge, new LinearLayout.LayoutParams(dp(40), dp(40)));
+            TextView label = text(name, 16, INK);
+            label.setPadding(dp(16), 0, dp(12), 0);
+            label.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            option.addView(label, new LinearLayout.LayoutParams(0, -2, 1));
+            ImageView check = new ImageView(this);
+            check.setImageResource(R.drawable.ic_check);
+            check.setImageTintList(ColorStateList.valueOf(ACCENT_TEXT));
+            check.setTag("selection");
+            check.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            option.addView(check, new LinearLayout.LayoutParams(dp(24), dp(24)));
+            View.OnClickListener choose = view -> { chosenLanguage[0] = code; selectSetting(languageChoices, code); };
+            option.setOnClickListener(choose); label.setOnClickListener(choose);
+            option.setFocusable(true);
+            option.setContentDescription(name);
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+            params.topMargin = dp(8);
+            language.addView(option, params);
+            languageChoices.add(option);
         }
-        content.addView(language);
-        content.addView(button(R.string.apply_settings, view -> {
-            String chosenTheme = appearance.findViewById(appearance.getCheckedRadioButtonId()).getTag().toString();
-            String chosenLanguage = language.findViewById(language.getCheckedRadioButtonId()).getTag().toString();
-            if (!getSharedPreferences("settings", 0).edit().putString("theme", chosenTheme)
-                    .putString("language", chosenLanguage).commit()) {
+        selectSetting(languageChoices, chosenLanguage[0]);
+        Button apply = button(R.string.apply_settings, view -> {
+            if (!getSharedPreferences("settings", 0).edit().putString("theme", chosenTheme[0])
+                    .putString("language", chosenLanguage[0]).commit()) {
                 showError(new IOException(getString(R.string.settings_save_error))); return;
             }
             saveDraft();
             dialog.dismiss();
-            if (!current.equals(chosenLanguage)) {
+            if (!current.equals(chosenLanguage[0])) {
                 getSystemService(android.app.LocaleManager.class)
-                        .setApplicationLocales(android.os.LocaleList.forLanguageTags(chosenLanguage));
-            } else if (!selected.equals(chosenTheme)) recreate();
-        }));
+                        .setApplicationLocales(android.os.LocaleList.forLanguageTags(chosenLanguage[0]));
+            } else if (!selected.equals(chosenTheme[0])) recreate();
+        });
+        apply.setTextColor(Color.BLACK);
+        apply.setBackground(buttonSurface(ACCENT, 28));
+        apply.setMinHeight(dp(56));
+        LinearLayout.LayoutParams applyParams = new LinearLayout.LayoutParams(-1, -2);
+        applyParams.topMargin = dp(16);
+        layout.addView(apply, applyParams);
         showFull(dialog);
     }
 
-    private View settingsButton() {
+    private void selectSetting(List<View> options, String value) {
+        for (View option : options) {
+            boolean selected = value.equals(option.getTag());
+            option.setSelected(selected);
+            option.setStateDescription(getString(selected ? R.string.option_selected : R.string.option_not_selected));
+            GradientDrawable surface = rounded(selected ? (BG == Color.BLACK ? 0xFF3C3218 : 0xFFFFF3CC) : CONTROL, 18);
+            if (selected) surface.setStroke(dp(2), ACCENT);
+            option.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFC107), surface, rounded(Color.WHITE, 18)));
+            View check = option.findViewWithTag("selection");
+            if (check != null) check.setVisibility(selected ? View.VISIBLE : View.INVISIBLE);
+        }
+    }
+
+    private android.widget.ImageButton iconButton(int icon, int description, View.OnClickListener action) {
         android.widget.ImageButton button = new android.widget.ImageButton(this);
-        button.setImageResource(android.R.drawable.ic_menu_preferences);
+        button.setImageResource(icon);
         button.setImageTintList(ColorStateList.valueOf(INK));
         button.setBackground(buttonSurface(CONTROL, 24));
-        button.setContentDescription(getString(R.string.settings));
+        button.setPadding(dp(12), dp(12), dp(12), dp(12));
+        button.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        button.setContentDescription(getString(description));
         button.setMinimumWidth(dp(48)); button.setMinimumHeight(dp(48));
-        button.setOnClickListener(view -> {
+        button.setOnClickListener(action);
+        return button;
+    }
+
+    private View settingsButton() {
+        return iconButton(R.drawable.ic_settings, R.string.settings, view -> {
             if (busy) showError(new IOException(getString(R.string.busy)));
             else showSettings();
         });
-        return button;
     }
 
     void openEditor() {
@@ -376,7 +458,9 @@ public final class MainActivity extends Activity {
         header.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
         Button reset = button(R.string.templates, view -> { saveDraft(); showTemplates(); });
         header.addView(reset, new LinearLayout.LayoutParams(-2, -2));
-        header.addView(settingsButton(), new LinearLayout.LayoutParams(dp(48), dp(48)));
+        LinearLayout.LayoutParams settingsParams = new LinearLayout.LayoutParams(dp(48), dp(48));
+        settingsParams.setMarginStart(dp(12));
+        header.addView(settingsButton(), settingsParams);
         root.addView(header);
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
@@ -402,7 +486,8 @@ public final class MainActivity extends Activity {
         identity.addView(titleLabel); identity.addView(title);
         identity.addView(text(getString(R.string.filename_help), 13, MUTED));
         watch(title, value -> { draft.title = value; saveDraft(); updateExportEnabled(); });
-        LinearLayout cover = card(body, R.string.cover);
+        coverSection = new OptionalSection(body, R.string.cover, !draft.coverPath.isEmpty());
+        LinearLayout cover = coverSection.content;
         LinearLayout coverRow = row();
         coverPreview = new ImageView(this);
         coverPreview.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -420,7 +505,8 @@ public final class MainActivity extends Activity {
         coverButtonParams.leftMargin = dp(16);
         coverRow.addView(coverButtons, coverButtonParams);
         cover.addView(coverRow);
-        LinearLayout wallpaper = card(body, R.string.wallpaper);
+        wallpaperSection = new OptionalSection(body, R.string.wallpaper, !draft.wallpaperPath.isEmpty());
+        LinearLayout wallpaper = wallpaperSection.content;
         wallpaper.addView(text(getString(R.string.wallpaper_help), 13, MUTED));
         LinearLayout wallpaperRow = row();
         wallpaperPreview = new ImageView(this);
@@ -495,8 +581,9 @@ public final class MainActivity extends Activity {
         shapeRow.addView(shapes, new LinearLayout.LayoutParams(0, -2, 1));
         packCard.addView(shapeRow);
         packCard.addView(text(getString(R.string.fallback_shape_help), 13, MUTED));
-        packCard.addView(text(getString(R.string.overlay_title), 16, INK));
-        packCard.addView(text(getString(R.string.overlay_help), 13, MUTED));
+        overlaySection = new OptionalSection(body, R.string.overlay_title, !draft.overlay.isEmpty());
+        LinearLayout overlay = overlaySection.content;
+        overlay.addView(text(getString(R.string.overlay_help), 13, MUTED));
         LinearLayout overlayButtons = row();
         overlayButtons.addView(button(R.string.choose_overlay, view -> openFile(OVERLAY_FILE, "image/png")),
                 new LinearLayout.LayoutParams(0, -2, 1));
@@ -506,7 +593,7 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams removeOverlayParams = new LinearLayout.LayoutParams(0, -2, 1);
         removeOverlayParams.leftMargin = dp(6);
         overlayButtons.addView(removeOverlay, removeOverlayParams);
-        packCard.addView(overlayButtons);
+        overlay.addView(overlayButtons);
         overlayScope = new RadioGroup(this);
         for (int label : new int[]{R.string.overlay_fallback, R.string.overlay_all}) {
             RadioButton option = new RadioButton(this);
@@ -517,7 +604,7 @@ public final class MainActivity extends Activity {
         overlayScope.setOnCheckedChangeListener((group, id) -> {
             draft.overlayAll = id == overlayScope.getChildAt(1).getId(); saveDraft(); refresh();
         });
-        packCard.addView(overlayScope);
+        overlay.addView(overlayScope);
         CheckBox folderBackground = new CheckBox(this);
         folderBackground.setText(R.string.folder_background);
         folderBackground.setTextColor(INK);
@@ -599,6 +686,9 @@ public final class MainActivity extends Activity {
         ((ViewGroup.MarginLayoutParams) chooseOverlay.getLayoutParams()).rightMargin = draft.overlay.isEmpty() ? 0 : dp(6);
         chooseOverlay.requestLayout();
         overlayScope.setVisibility(draft.overlay.isEmpty() ? View.GONE : View.VISIBLE);
+        coverSection.update(!draft.coverPath.isEmpty());
+        wallpaperSection.update(!draft.wallpaperPath.isEmpty());
+        overlaySection.update(!draft.overlay.isEmpty());
     }
 
     private void updateExportEnabled() {
@@ -1638,6 +1728,42 @@ public final class MainActivity extends Activity {
             label.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL)); panel.addView(label);
         }
         return panel;
+    }
+
+    private final class OptionalSection {
+        final LinearLayout content = column();
+        final Button toggle;
+        private boolean populated;
+
+        OptionalSection(LinearLayout parent, int heading, boolean populated) {
+            this.populated = populated;
+            LinearLayout panel = card(parent, 0);
+            toggle = button(heading, view -> setExpanded(content.getVisibility() != View.VISIBLE));
+            toggle.setTextColor(INK);
+            toggle.setTextSize(18);
+            toggle.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+            toggle.setPadding(0, 0, 0, 0);
+            toggle.setCompoundDrawablePadding(dp(12));
+            toggle.setBackground(buttonSurface(PANEL, 16));
+            toggle.setStateListAnimator(null);
+            toggle.setElevation(0);
+            panel.addView(toggle, new LinearLayout.LayoutParams(-1, -2));
+            panel.addView(content, new LinearLayout.LayoutParams(-1, -2));
+            setExpanded(populated);
+        }
+
+        void setExpanded(boolean expanded) {
+            content.setVisibility(expanded ? View.VISIBLE : View.GONE);
+            var arrow = getDrawable(expanded ? R.drawable.ic_collapse : R.drawable.ic_expand).mutate();
+            arrow.setTint(MUTED);
+            toggle.setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, arrow, null);
+            toggle.setStateDescription(getString(expanded ? R.string.section_expanded : R.string.section_collapsed));
+        }
+
+        void update(boolean populated) {
+            if (populated && !this.populated) setExpanded(true);
+            this.populated = populated;
+        }
     }
     private GradientDrawable rounded(int color, int radius) {
         GradientDrawable drawable = new GradientDrawable(); drawable.setColor(color); drawable.setCornerRadius(dp(radius)); return drawable;
