@@ -77,6 +77,11 @@ public final class DeviceTests extends Instrumentation {
                     && info.badge().getHeight() == 96, "Discovered pack has an application icon for picker");
         }
         IconRepository.Pack pack = repository.load(packName);
+        if (packs.stream().anyMatch(info -> info.packageName().equals("com.lknninex.mation"))) {
+            IconRepository.Pack mation = repository.load("com.lknninex.mation");
+            check(mation.icons.size() > 1000 && mation.mappings.size() > 1000 && !mation.icons.containsKey("an_icon"),
+                    "Pack with template stubs in assets still loads the full res/xml catalogue");
+        }
         verifyFileIcons(context, pack);
         verifyMaskGeometry(context, repository, pack, packs);
         verifyWallpaper(context, pack);
@@ -1876,7 +1881,15 @@ public final class DeviceTests extends Instrumentation {
             if (!busy.get()) return;
             Thread.sleep(100);
         } while (android.os.SystemClock.uptimeMillis() < deadline);
-        throw new AssertionError("UI work did not finish in 60 seconds");
+        StringBuilder stacks = new StringBuilder();
+        for (var entry : Thread.getAllStackTraces().entrySet()) {
+            StackTraceElement[] trace = entry.getValue();
+            if (java.util.Arrays.stream(trace).noneMatch(frame -> frame.getClassName().startsWith("dev.iconmanager.")
+                    && !frame.getClassName().contains("DeviceTests"))) continue;
+            stacks.append("\n--- ").append(entry.getKey().getName());
+            for (int i = 0; i < Math.min(25, trace.length); i++) stacks.append("\n  at ").append(trace[i]);
+        }
+        throw new AssertionError("UI work did not finish in 60 seconds" + stacks);
     }
 
     private android.widget.TextView findText(android.view.View view, String text) {

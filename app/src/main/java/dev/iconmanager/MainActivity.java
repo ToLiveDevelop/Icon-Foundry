@@ -125,15 +125,26 @@ public final class MainActivity extends Activity {
         List<String> selected = List.copyOf(draft.packs);
         List<String> missing = new ArrayList<>();
         work(getString(R.string.loading_template), () -> {
-            apps = repository.apps();
-            List<IconRepository.Pack> loaded = new ArrayList<>();
-            android.content.pm.PackageManager.NameNotFoundException absent = null;
-            for (String packageName : selected) {
-                try { loaded.add(repository.load(packageName)); }
-                catch (android.content.pm.PackageManager.NameNotFoundException error) { missing.add(packageName); absent = error; }
-            }
-            if (loaded.isEmpty() && absent != null) throw absent;
-            return loaded;
+            java.util.concurrent.ExecutorService loaders = java.util.concurrent.Executors.newFixedThreadPool(
+                    Math.max(1, Math.min(4, selected.size())));
+            try {
+                List<java.util.concurrent.Future<IconRepository.Pack>> pending = new ArrayList<>();
+                for (String packageName : selected) pending.add(loaders.submit(() -> repository.load(packageName)));
+                apps = repository.apps();
+                List<IconRepository.Pack> loaded = new ArrayList<>();
+                android.content.pm.PackageManager.NameNotFoundException absent = null;
+                for (int i = 0; i < selected.size(); i++) {
+                    try { loaded.add(pending.get(i).get()); }
+                    catch (java.util.concurrent.ExecutionException error) {
+                        if (error.getCause() instanceof android.content.pm.PackageManager.NameNotFoundException notFound) {
+                            missing.add(selected.get(i)); absent = notFound;
+                        } else if (error.getCause() instanceof Exception cause) throw cause;
+                        else throw error;
+                    }
+                }
+                if (loaded.isEmpty() && absent != null) throw absent;
+                return loaded;
+            } finally { loaders.shutdownNow(); }
         }, loaded -> {
             packs.addAll(loaded); pack = IconRepository.combine(packs); refresh();
             if (!missing.isEmpty()) showError(new IOException(getString(R.string.packs_missing, String.join(", ", missing))));

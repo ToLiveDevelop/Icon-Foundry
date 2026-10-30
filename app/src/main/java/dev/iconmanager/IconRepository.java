@@ -284,8 +284,9 @@ final class IconRepository {
                 pack.mappings.putIfAbsent(component.flattenToString(), drawable);
                 pack.byPackage.putIfAbsent(component.getPackageName(), drawable);
             }
-        });
+        }, () -> {}, () -> !pack.mappings.isEmpty());
         String[] category = {"Все"};
+        java.util.Set<String> catalogued = new java.util.HashSet<>();
         // Some packs expose no catalogue; their mapped resources remain selectable.
         if (hasXml(resources, packageName, "drawable")) {
             parse(resources, packageName, "drawable", parser -> {
@@ -294,9 +295,11 @@ final class IconRepository {
                     if (category[0] == null) category[0] = "Все";
                 } else if (parser.getName().equals("item")) {
                     String name = parser.getAttributeValue(null, "drawable");
-                    if (name != null) addIcon(pack, name, category[0]);
+                    if (name != null && !catalogued.contains(name) && addIcon(pack, name, category[0])) {
+                        catalogued.add(name);
+                    }
                 }
-            });
+            }, () -> category[0] = "Все", () -> !catalogued.isEmpty());
         }
         if (pack.icons.isEmpty()) throw new IOException("В appfilter нет доступных ресурсов иконок.");
         return pack;
@@ -363,20 +366,30 @@ final class IconRepository {
 
     private static void parse(Resources resources, String packageName, String name, TagReader reader)
             throws IOException, XmlPullParserException {
+        parse(resources, packageName, name, reader, () -> {}, () -> true);
+    }
+
+    /** Prefers res/xml; assets are a fallback because some packs ship template stubs there. */
+    private static void parse(Resources resources, String packageName, String name, TagReader reader,
+                              Runnable betweenSources, java.util.function.BooleanSupplier usable)
+            throws IOException, XmlPullParserException {
         boolean asset = false;
         for (String file : resources.getAssets().list("")) {
             if (file.equals(name + ".xml")) asset = true;
         }
+        int id = resources.getIdentifier(name, "xml", packageName);
+        if (id == 0 && !asset) throw new IOException("Нет " + name + ".xml в " + packageName);
+        if (id != 0) {
+            try (XmlResourceParser parser = resources.getXml(id)) {
+                readTags(parser, reader);
+            }
+            if (usable.getAsBoolean()) return;
+        }
         if (asset) {
+            betweenSources.run();
             try (InputStream input = resources.getAssets().open(name + ".xml")) {
                 XmlPullParser parser = Xml.newPullParser();
                 parser.setInput(input, "UTF-8");
-                readTags(parser, reader);
-            }
-        } else {
-            int id = resources.getIdentifier(name, "xml", packageName);
-            if (id == 0) throw new IOException("Нет " + name + ".xml в " + packageName);
-            try (XmlResourceParser parser = resources.getXml(id)) {
                 readTags(parser, reader);
             }
         }
