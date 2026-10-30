@@ -1396,6 +1396,23 @@ public final class MainActivity extends Activity {
         preview.setBackground(rounded(CONTROL, 16));
         preview.setImageBitmap(image);
         preview.setContentDescription(getString(R.string.file_icon_preview));
+        if (draft.overlayAll && !draft.overlay.isEmpty()) {
+            String overlayReference = draft.overlay;
+            String key = "file-preview:" + appKey + ":" + overlayReference;
+            preview.setTag(key);
+            Bitmap rendering = image.copy(Bitmap.Config.ARGB_8888, true);
+            thumbnails.execute(() -> {
+                try {
+                    Bitmap bitmap = withPreviewOverlay(rendering, overlayReference);
+                    runOnUiThread(() -> {
+                        if (!isDestroyed() && dialog.isShowing()) preview.setImageBitmap(bitmap);
+                        else bitmap.recycle();
+                    });
+                } catch (IOException | RuntimeException error) {
+                    reportImageError(preview, key, appKey, error);
+                }
+            });
+        }
         content.addView(preview, new LinearLayout.LayoutParams(-1, dp(192)));
         content.addView(button(R.string.use_icon_file, view -> {
             Bitmap saving = image.copy(Bitmap.Config.ARGB_8888, false);
@@ -1416,7 +1433,11 @@ public final class MainActivity extends Activity {
         content.addView(button(R.string.cancel, view -> dialog.dismiss()));
         dialog.setContentView(content);
         dialog.setOnDismissListener(ignored -> {
+            var displayed = preview.getDrawable();
+            preview.setTag(null);
             preview.setImageDrawable(null);
+            if (displayed instanceof android.graphics.drawable.BitmapDrawable drawable && drawable.getBitmap() != image)
+                drawable.getBitmap().recycle();
             image.recycle();
             if (fileIconDialog == dialog) fileIconDialog = null;
         });
@@ -1426,15 +1447,26 @@ public final class MainActivity extends Activity {
     }
 
     private void bindSystemImage(ImageView view, IconRepository.App app) {
-        String key = "system:" + app.key();
+        String overlayReference = draft.overlay;
+        String key = "system:" + app.key() + ":overlay:" + overlayReference;
         view.setTag(key);
         view.setImageResource(R.drawable.app_icon);
+        Bitmap cached = images.get(key);
+        if (cached != null) { view.setImageBitmap(cached); return; }
         thumbnails.execute(() -> {
             try {
                 var icon = getPackageManager().getActivityIcon(app.component());
-                runOnUiThread(() -> { if (!isDestroyed() && key.equals(view.getTag())) view.setImageDrawable(icon); });
-            } catch (android.content.pm.PackageManager.NameNotFoundException | RuntimeException ignored) {
+                if (overlayReference.isEmpty()) {
+                    runOnUiThread(() -> { if (!isDestroyed() && key.equals(view.getTag())) view.setImageDrawable(icon); });
+                } else {
+                    Bitmap bitmap = withPreviewOverlay(IconShape.previewSource(icon, false), overlayReference);
+                    images.put(key, bitmap);
+                    runOnUiThread(() -> { if (!isDestroyed() && key.equals(view.getTag())) view.setImageBitmap(bitmap); });
+                }
+            } catch (android.content.pm.PackageManager.NameNotFoundException ignored) {
                 // Apps that are not installed have no system icon; the placeholder stays.
+            } catch (IOException | RuntimeException error) {
+                reportImageError(view, key, app.key(), error);
             }
         });
     }
@@ -1444,8 +1476,10 @@ public final class MainActivity extends Activity {
     }
 
     private void bindImage(ImageView view, IconRepository.Pack current, String name) {
-        String key = name == null ? "" : IconRepository.reference(
-                IconRepository.sourcePackage(name, current.packageName), IconRepository.resourceName(name));
+        String overlayReference = draft.overlayAll ? draft.overlay : "";
+        String key = (name == null ? "" : IconRepository.reference(
+                IconRepository.sourcePackage(name, current.packageName), IconRepository.resourceName(name)))
+                + ":overlay:" + overlayReference;
         view.setTag(key);
         view.setImageResource(R.drawable.app_icon);
         if (name == null) return;
@@ -1453,17 +1487,33 @@ public final class MainActivity extends Activity {
         if (cached != null) { view.setImageBitmap(cached); return; }
         thumbnails.execute(() -> {
             try {
-                Bitmap bitmap = current.render(name, 128);
+                Bitmap bitmap = withPreviewOverlay(current.render(name, 128), overlayReference);
                 images.put(key, bitmap);
                 runOnUiThread(() -> { if (!isDestroyed() && key.equals(view.getTag())) view.setImageBitmap(bitmap); });
             } catch (IOException | RuntimeException error) {
-                Log.e("IconManager", "Не удалось показать " + name, error);
-                runOnUiThread(() -> {
-                    if (!isDestroyed() && key.equals(view.getTag())) {
-                        view.setContentDescription(App.text(R.string.resource_error) + name);
-                        if (reportedImageErrors.add(key)) showError(error);
-                    }
-                });
+                reportImageError(view, key, name, error);
+            }
+        });
+    }
+
+    private Bitmap withPreviewOverlay(Bitmap image, String reference) throws IOException {
+        try {
+            Bitmap overlay = IconOverlay.load(this, reference);
+            try { IconOverlay.draw(image, overlay); }
+            finally { if (overlay != null) overlay.recycle(); }
+            return image;
+        } catch (IOException | RuntimeException error) {
+            image.recycle();
+            throw error;
+        }
+    }
+
+    private void reportImageError(ImageView view, String key, String name, Exception error) {
+        Log.e("IconManager", "Не удалось показать " + name, error);
+        runOnUiThread(() -> {
+            if (!isDestroyed() && key.equals(view.getTag())) {
+                view.setContentDescription(App.text(R.string.resource_error) + name);
+                if (reportedImageErrors.add(key)) showError(error);
             }
         });
     }

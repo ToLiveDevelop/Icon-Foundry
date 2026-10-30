@@ -572,6 +572,7 @@ public final class DeviceTests extends Instrumentation {
                 } catch (ReflectiveOperationException error) { throw new AssertionError(error); }
             });
             waitForWork(activity);
+            verifyPreviewOverlays(activity);
             runOnMainChecked(() -> {
                 check(FileIcons.isFile(isolated.overlay), "Confirmed overlay is copied into local file storage");
                 check(((android.view.View) field(field(activity, "overlaySection"), "content")).getVisibility()
@@ -618,6 +619,138 @@ public final class DeviceTests extends Instrumentation {
                 if (!beforeFiles.contains(file.getName())) Files.deleteIfExists(file.toPath());
             }
         }
+    }
+
+    private void verifyPreviewOverlays(MainActivity activity) throws Exception {
+        Draft draft = (Draft) field(activity, "draft");
+        IconRepository.Pack pack = (IconRepository.Pack) field(activity, "pack");
+        @SuppressWarnings("unchecked")
+        List<IconRepository.App> apps = (List<IconRepository.App>) field(activity, "apps");
+        IconRepository.App app = apps.get(0);
+        IconRepository.Pack source = pack.members.isEmpty() ? pack : pack.members.get(0);
+        String icon = source.icons.keySet().iterator().next();
+        String previousOverlay = draft.overlay;
+        boolean previousAll = draft.overlayAll;
+        Map<String, String> previousOverrides = new LinkedHashMap<>(draft.overrides);
+        Bitmap file = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+        file.eraseColor(android.graphics.Color.BLUE);
+        String fileReference = FileIcons.save(activity, file);
+        Bitmap otherOverlay = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+        android.graphics.Paint paint = new android.graphics.Paint();
+        paint.setColor(android.graphics.Color.RED);
+        new android.graphics.Canvas(otherOverlay).drawRect(0, 0, 192, 16, paint);
+        String otherReference = FileIcons.save(activity, otherOverlay);
+        otherOverlay.recycle();
+        var bind = MainActivity.class.getDeclaredMethod("bindImage",
+                android.widget.ImageView.class, IconRepository.Pack.class, String.class);
+        var bindSystem = MainActivity.class.getDeclaredMethod("bindSystemImage",
+                android.widget.ImageView.class, IconRepository.App.class);
+        bind.setAccessible(true); bindSystem.setAccessible(true);
+        try {
+            for (String mode : List.of("fallback", "all", "removed", "changed", "fallback", "all")) {
+                boolean all = mode.equals("all") || mode.equals("changed");
+                String overlayReference = mode.equals("removed") ? ""
+                        : mode.equals("changed") ? otherReference : previousOverlay;
+                android.widget.ImageView[] views = new android.widget.ImageView[4];
+                Bitmap[] placeholder = new Bitmap[1];
+                runOnMainChecked(() -> {
+                    draft.overlayAll = all; draft.overlay = overlayReference;
+                    for (int i = 0; i < views.length; i++) views[i] = new android.widget.ImageView(activity);
+                    bind.invoke(activity, views[0], source, icon);
+                    bind.invoke(activity, views[1], pack, fileReference);
+                    bindSystem.invoke(activity, views[2], app);
+                    bind.invoke(activity, views[3], pack, null);
+                    placeholder[0] = IconShape.previewSource(views[3].getDrawable(), false);
+                });
+                waitForThumbnails(activity);
+                Bitmap overlay = IconOverlay.load(activity, overlayReference);
+                Bitmap[] expected = {source.render(icon, 128), pack.render(fileReference, 128),
+                        IconShape.previewSource(activity.getPackageManager().getActivityIcon(app.component()), false)};
+                try {
+                    for (int i = 0; i < expected.length; i++) if (i == 2 || all) IconOverlay.draw(expected[i], overlay);
+                    runOnMainChecked(() -> {
+                        for (int i = 0; i < expected.length; i++) {
+                            Bitmap actual = i == 2 ? IconShape.previewSource(views[i].getDrawable(), false)
+                                    : ((android.graphics.drawable.BitmapDrawable) views[i].getDrawable()).getBitmap();
+                            try { check(actual.sameAs(expected[i]), "Preview pixels respect overlay scope/cache: " + mode + "/" + i); }
+                            finally { if (i == 2) actual.recycle(); }
+                        }
+                        Bitmap hidden = IconShape.previewSource(views[3].getDrawable(), false);
+                        try { check(hidden.sameAs(placeholder[0]), "Hidden system icons keep their placeholder without an overlay"); }
+                        finally { hidden.recycle(); }
+                    });
+                } finally {
+                    if (overlay != null) overlay.recycle();
+                    for (Bitmap bitmap : expected) bitmap.recycle();
+                    placeholder[0].recycle();
+                }
+            }
+            android.widget.ImageView[] pickerImage = new android.widget.ImageView[1];
+            MainActivity.IconChoice[] choice = new MainActivity.IconChoice[1];
+            runOnMainChecked(() -> {
+                activity.showIcons(app, () -> {});
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "iconDialog");
+                android.widget.GridView grid = findGrid(dialog.getWindow().getDecorView());
+                choice[0] = (MainActivity.IconChoice) grid.getAdapter().getItem(0);
+                android.view.ViewGroup tile = (android.view.ViewGroup) grid.getAdapter().getView(0, null, grid);
+                pickerImage[0] = (android.widget.ImageView) ((android.view.ViewGroup) tile.getChildAt(0)).getChildAt(0);
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                Bitmap expected = withOverlay(activity, choice[0].source().render(choice[0].icon().name(), 128), previousOverlay);
+                try { check(((android.graphics.drawable.BitmapDrawable) pickerImage[0].getDrawable()).getBitmap().sameAs(expected),
+                        "Manual icon catalogue applies the all-icons overlay"); }
+                finally { expected.recycle(); }
+                ((android.app.Dialog) field(activity, "iconDialog")).dismiss();
+                var preview = MainActivity.class.getDeclaredMethod("previewFileIcon", String.class, Runnable.class, Bitmap.class);
+                preview.setAccessible(true);
+                preview.invoke(activity, app.key(), (Runnable) () -> {}, file.copy(Bitmap.Config.ARGB_8888, true));
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "fileIconDialog");
+                android.view.ViewGroup content = (android.view.ViewGroup) dialog.findViewById(android.R.id.content);
+                android.widget.ImageView image = (android.widget.ImageView) ((android.view.ViewGroup) content.getChildAt(0)).getChildAt(2);
+                Bitmap expected = withOverlay(activity, file.copy(Bitmap.Config.ARGB_8888, true), previousOverlay);
+                try { check(((android.graphics.drawable.BitmapDrawable) image.getDrawable()).getBitmap().sameAs(expected),
+                        "File import preview applies the all-icons overlay"); }
+                finally { expected.recycle(); }
+                findText(dialog.getWindow().getDecorView(), activity.getString(R.string.use_icon_file)).performClick();
+            });
+            waitForWork(activity);
+            Bitmap saved = pack.render(draft.overrides.get(app.key()), 192);
+            try { check(saved.sameAs(file), "Preview overlay is not baked into the saved source file"); }
+            finally { saved.recycle(); }
+        } finally {
+            runOnMainChecked(() -> {
+                for (String name : List.of("iconDialog", "fileIconDialog")) {
+                    android.app.Dialog dialog = (android.app.Dialog) field(activity, name);
+                    if (dialog != null) dialog.dismiss();
+                }
+                draft.overlay = previousOverlay; draft.overlayAll = previousAll;
+                draft.overrides.clear(); draft.overrides.putAll(previousOverrides);
+            });
+            file.recycle();
+        }
+    }
+
+    private Bitmap withOverlay(Context context, Bitmap image, String reference) throws Exception {
+        Bitmap overlay = IconOverlay.load(context, reference);
+        try { IconOverlay.draw(image, overlay); return image; }
+        finally { if (overlay != null) overlay.recycle(); }
+    }
+
+    private void waitForThumbnails(MainActivity activity) throws Exception {
+        var executor = (java.util.concurrent.ExecutorService) field(activity, "thumbnails");
+        var ready = new java.util.concurrent.CountDownLatch(2);
+        List<java.util.concurrent.Future<?>> barriers = new ArrayList<>();
+        for (int i = 0; i < 2; i++) barriers.add(executor.submit(() -> {
+            ready.countDown();
+            if (!ready.await(30, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("Thumbnail queue timed out");
+            return null;
+        }));
+        for (var barrier : barriers) barrier.get(35, java.util.concurrent.TimeUnit.SECONDS);
+        waitForIdleSync();
     }
 
     private void verifySettingsResources(Context context) {
