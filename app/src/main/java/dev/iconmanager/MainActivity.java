@@ -521,6 +521,30 @@ public final class MainActivity extends Activity {
         wallpaperButtons.addView(removeWallpaper);
         wallpaperRow.addView(wallpaperButtons, new LinearLayout.LayoutParams(0, -2, 1));
         wallpaper.addView(wallpaperRow);
+        overlaySection = new OptionalSection(body, R.string.overlay_title, !draft.overlay.isEmpty());
+        LinearLayout overlay = overlaySection.content;
+        overlay.addView(text(getString(R.string.overlay_help), 13, MUTED));
+        LinearLayout overlayButtons = row();
+        overlayButtons.addView(button(R.string.choose_overlay, view -> openFile(OVERLAY_FILE, "image/png")),
+                new LinearLayout.LayoutParams(0, -2, 1));
+        removeOverlay = button(R.string.remove_overlay, view -> {
+            draft.overlay = ""; draft.overlayAll = false; saveDraft(); refresh();
+        });
+        LinearLayout.LayoutParams removeOverlayParams = new LinearLayout.LayoutParams(0, -2, 1);
+        removeOverlayParams.leftMargin = dp(6);
+        overlayButtons.addView(removeOverlay, removeOverlayParams);
+        overlay.addView(overlayButtons);
+        overlayScope = new RadioGroup(this);
+        for (int label : new int[]{R.string.overlay_fallback, R.string.overlay_all}) {
+            RadioButton option = new RadioButton(this);
+            option.setId(View.generateViewId()); option.setText(label);
+            overlayScope.addView(option);
+        }
+        overlayScope.check(overlayScope.getChildAt(draft.overlayAll ? 1 : 0).getId());
+        overlayScope.setOnCheckedChangeListener((group, id) -> {
+            draft.overlayAll = id == overlayScope.getChildAt(1).getId(); saveDraft(); refresh();
+        });
+        overlay.addView(overlayScope);
         packCard = card(body, R.string.theme_options);
         packCard.addView(text(getString(R.string.export_scope), 16, INK));
         exportScope = new RadioGroup(this);
@@ -581,30 +605,6 @@ public final class MainActivity extends Activity {
         shapeRow.addView(shapes, new LinearLayout.LayoutParams(0, -2, 1));
         packCard.addView(shapeRow);
         packCard.addView(text(getString(R.string.fallback_shape_help), 13, MUTED));
-        overlaySection = new OptionalSection(body, R.string.overlay_title, !draft.overlay.isEmpty());
-        LinearLayout overlay = overlaySection.content;
-        overlay.addView(text(getString(R.string.overlay_help), 13, MUTED));
-        LinearLayout overlayButtons = row();
-        overlayButtons.addView(button(R.string.choose_overlay, view -> openFile(OVERLAY_FILE, "image/png")),
-                new LinearLayout.LayoutParams(0, -2, 1));
-        removeOverlay = button(R.string.remove_overlay, view -> {
-            draft.overlay = ""; draft.overlayAll = false; saveDraft(); refresh();
-        });
-        LinearLayout.LayoutParams removeOverlayParams = new LinearLayout.LayoutParams(0, -2, 1);
-        removeOverlayParams.leftMargin = dp(6);
-        overlayButtons.addView(removeOverlay, removeOverlayParams);
-        overlay.addView(overlayButtons);
-        overlayScope = new RadioGroup(this);
-        for (int label : new int[]{R.string.overlay_fallback, R.string.overlay_all}) {
-            RadioButton option = new RadioButton(this);
-            option.setId(View.generateViewId()); option.setText(label);
-            overlayScope.addView(option);
-        }
-        overlayScope.check(overlayScope.getChildAt(draft.overlayAll ? 1 : 0).getId());
-        overlayScope.setOnCheckedChangeListener((group, id) -> {
-            draft.overlayAll = id == overlayScope.getChildAt(1).getId(); saveDraft(); refresh();
-        });
-        overlay.addView(overlayScope);
         CheckBox folderBackground = new CheckBox(this);
         folderBackground.setText(R.string.folder_background);
         folderBackground.setTextColor(INK);

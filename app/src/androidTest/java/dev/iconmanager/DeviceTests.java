@@ -523,6 +523,16 @@ public final class DeviceTests extends Instrumentation {
                 try {
                     var build = MainActivity.class.getDeclaredMethod("buildScreen");
                     build.setAccessible(true); build.invoke(activity);
+                    android.view.View coverPanel = (android.view.View) field(field(activity, "coverSection"), "content");
+                    android.view.View wallpaperPanel = (android.view.View) field(field(activity, "wallpaperSection"), "content");
+                    android.view.View overlayPanel = (android.view.View) field(field(activity, "overlaySection"), "content");
+                    android.view.ViewGroup form = (android.view.ViewGroup) coverPanel.getParent().getParent();
+                    android.view.View coverCard = (android.view.View) coverPanel.getParent();
+                    android.view.View wallpaperCard = (android.view.View) wallpaperPanel.getParent();
+                    android.view.View overlayCard = (android.view.View) overlayPanel.getParent();
+                    check(form.indexOfChild(coverCard) + 1 == form.indexOfChild(wallpaperCard)
+                                    && form.indexOfChild(wallpaperCard) + 1 == form.indexOfChild(overlayCard),
+                            "Cover, wallpaper and overlay sections appear consecutively in that order");
                     String unchanged = isolated.toJson().toString();
                     for (String section : List.of("coverSection", "wallpaperSection", "overlaySection")) {
                         Object optional = field(activity, section);
