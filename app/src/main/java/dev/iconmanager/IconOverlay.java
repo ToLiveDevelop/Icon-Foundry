@@ -69,9 +69,48 @@ final class IconOverlay {
         return result;
     }
 
+    /** Scaled or clipped overlays may legitimately fill the whole canvas, so only size and visibility matter. */
+    static void validateRendered(Bitmap bitmap) throws IOException {
+        if (bitmap.getWidth() != IconShape.SIZE || bitmap.getHeight() != IconShape.SIZE) {
+            throw new IOException(App.text(R.string.overlay_invalid));
+        }
+        for (int y = 0; y < bitmap.getHeight(); y++) for (int x = 0; x < bitmap.getWidth(); x++) {
+            if (android.graphics.Color.alpha(bitmap.getPixel(x, y)) > 0) return;
+        }
+        throw new IOException(App.text(R.string.overlay_clipped_empty));
+    }
+
+    /** Returns the native icon_border bitmap, optionally clipped to the fallback mask silhouette. */
+    static Bitmap border(Bitmap overlay, IconShape shape, int[] corners, int maskSize, boolean clip) {
+        Bitmap result = overlay.copy(Bitmap.Config.ARGB_8888, true);
+        if (!clip || shape == IconShape.NONE) return result;
+        Bitmap mask = shape.mask(maskSize, corners);
+        try { applyAlpha(result, mask); }
+        finally { mask.recycle(); }
+        return result;
+    }
+
     static void draw(Bitmap icon, Bitmap overlay) {
         if (overlay == null) return;
         new Canvas(icon).drawBitmap(overlay, null, new Rect(0, 0, icon.getWidth(), icon.getHeight()),
                 new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG));
+    }
+
+    /** Draws the overlay, optionally keeping it inside the icon's own visible silhouette. */
+    static void draw(Bitmap icon, Bitmap overlay, boolean clipToIcon) {
+        if (overlay == null) return;
+        if (!clipToIcon) { draw(icon, overlay); return; }
+        Bitmap layer = Bitmap.createBitmap(icon.getWidth(), icon.getHeight(), Bitmap.Config.ARGB_8888);
+        try {
+            draw(layer, overlay);
+            applyAlpha(layer, icon);
+            new Canvas(icon).drawBitmap(layer, 0, 0, new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG));
+        } finally { layer.recycle(); }
+    }
+
+    private static void applyAlpha(Bitmap target, Bitmap alpha) {
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        paint.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN));
+        new Canvas(target).drawBitmap(alpha, null, new Rect(0, 0, target.getWidth(), target.getHeight()), paint);
     }
 }

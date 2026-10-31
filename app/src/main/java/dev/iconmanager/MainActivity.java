@@ -526,7 +526,8 @@ public final class MainActivity extends Activity {
         overlayButtons.addView(button(R.string.choose_overlay, view -> openFile(OVERLAY_FILE, "image/png")),
                 new LinearLayout.LayoutParams(0, -2, 1));
         removeOverlay = button(R.string.remove_overlay, view -> {
-            draft.overlay = ""; draft.overlayAll = false; draft.overlayScale = 100; saveDraft(); refresh();
+            draft.overlay = ""; draft.overlayAll = false; draft.overlayScale = 100; draft.overlayClip = true;
+            saveDraft(); refresh();
         });
         LinearLayout.LayoutParams removeOverlayParams = new LinearLayout.LayoutParams(0, -2, 1);
         removeOverlayParams.leftMargin = dp(6);
@@ -669,10 +670,12 @@ public final class MainActivity extends Activity {
         List<IconRepository.App> candidates = apps.stream()
                 .filter(app -> currentPack == null || currentPack.automatic(app) == null).toList();
         IconShape shape = draft.shape;
+        int[] corners = draft.corners.clone();
         String overlayReference = draft.overlay;
         int overlayScale = draft.overlayScale;
-        String key = String.join(",", draft.packs) + ":" + shape + ":" + overlayReference + ":" + draft.overlayAll
-                + ":" + overlayScale;
+        boolean overlayClip = draft.overlayClip;
+        String key = String.join(",", draft.packs) + ":" + shapeKey(shape, corners) + ":" + overlayReference + ":"
+                + draft.overlayAll + ":" + overlayScale + ":" + overlayClip;
         if (key.equals(shapePreview.getTag())) return;
         ImageView target = shapePreview;
         target.setTag(key);
@@ -693,13 +696,11 @@ public final class MainActivity extends Activity {
                 String exampleName = example == null ? getString(R.string.app_name) : example.label();
                 Bitmap source = IconShape.previewSource(drawable, shape != IconShape.NONE);
                 Bitmap preview;
-                try {
-                    preview = shape.preview(source, currentPack == null ? IconShape.SIZE - 2 * IconShape.INSET
-                            : currentPack.fallbackSize());
-                } finally { source.recycle(); }
-                Bitmap overlay = IconOverlay.load(this, overlayReference, overlayScale);
-                try { IconOverlay.draw(preview, overlay); }
-                finally { if (overlay != null) overlay.recycle(); }
+                int visibleSize = currentPack == null ? IconShape.SIZE - 2 * IconShape.INSET
+                        : currentPack.fallbackSize();
+                try { preview = shape.preview(source, visibleSize, corners); }
+                finally { source.recycle(); }
+                withFallbackOverlay(preview, overlayReference, overlayScale, shape, corners, visibleSize, overlayClip);
                 runOnUiThread(() -> {
                     if (!isDestroyed() && key.equals(target.getTag())) {
                         target.setImageBitmap(preview);
@@ -756,6 +757,9 @@ public final class MainActivity extends Activity {
                 ? R.string.shape_preview_gradient : R.string.shape_preview_wallpaper), 12, MUTED));
         content.addView(text(getString(R.string.shape_preview_help), 13, MUTED));
         IconShape[] selected = {draft.shape};
+        IconShape[] preset = {draft.shape == IconShape.CUSTOM ? null : draft.shape};
+        int[] corners = draft.corners.clone();
+        boolean[] overlayClip = {draft.overlayClip};
         ShapePreview[] scene = new ShapePreview[1];
         Bitmap[] displayed = new Bitmap[1];
         List<Bitmap> silhouettes = new ArrayList<>();
@@ -775,7 +779,7 @@ public final class MainActivity extends Activity {
                 choice.findViewWithTag("shape-check").setVisibility(active ? View.VISIBLE : View.GONE);
             }
             if (scene[0] == null) return;
-            Bitmap image = scene[0].render(selected[0], overlayScale[0]);
+            Bitmap image = scene[0].render(selected[0], corners, overlayScale[0], overlayClip[0]);
             preview.setImageBitmap(image);
             preview.setContentDescription(getString(R.string.shape_example, getString(selected[0].label),
                     String.join(", ", examples.stream().map(IconRepository.App::label).toList())));
@@ -787,10 +791,82 @@ public final class MainActivity extends Activity {
                 overlayScale[0] = value;
                 render.run();
             }));
+            CheckBox clip = new CheckBox(this);
+            clip.setTag("overlay-clip");
+            clip.setText(R.string.overlay_clip);
+            clip.setTextColor(INK);
+            clip.setChecked(overlayClip[0]);
+            clip.setOnCheckedChangeListener((view, checked) -> { overlayClip[0] = checked; render.run(); });
+            content.addView(clip);
+            content.addView(text(getString(R.string.overlay_clip_help), 13, MUTED));
+        }
+        LinearLayout tabs = row();
+        tabs.setBackground(rounded(CONTROL, 24));
+        tabs.setPadding(dp(4), dp(4), dp(4), dp(4));
+        LinearLayout.LayoutParams tabsParams = new LinearLayout.LayoutParams(-1, -2);
+        tabsParams.topMargin = dp(16);
+        content.addView(tabs, tabsParams);
+        Button presetsTab = button(R.string.shape_tab_presets, null);
+        Button editorTab = button(R.string.shape_tab_editor, null);
+        presetsTab.setTag("shape-tab-presets");
+        editorTab.setTag("shape-tab-editor");
+        for (Button tab : new Button[]{presetsTab, editorTab}) {
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -2, 1);
+            tabs.addView(tab, params);
         }
         List<IconShape> shapes = List.of(IconShape.ROUNDED_SQUARE, IconShape.SQUIRCLE, IconShape.SQUARE, IconShape.CIRCLE,
                 IconShape.HEART, IconShape.STAR, IconShape.HEXAGON, IconShape.PENTAGON, IconShape.TEARDROP, IconShape.NONE);
         LinearLayout options = card(content, R.string.fallback_shape);
+        LinearLayout editor = card(content, R.string.shape_editor);
+        editor.setTag("shape-editor");
+        editor.addView(text(getString(R.string.shape_editor_help), 13, MUTED));
+        int[] cornerLabels = {R.string.corner_top_left, R.string.corner_top_right,
+                R.string.corner_bottom_right, R.string.corner_bottom_left};
+        for (int i = 0; i < 4; i++) {
+            int index = i;
+            TextView label = text(getString(cornerLabels[i], corners[i]), 14, INK);
+            editor.addView(label);
+            SeekBar slider = new SeekBar(this);
+            slider.setTag("corner-" + i);
+            slider.setMax(IconShape.MAX_CORNER);
+            slider.setKeyProgressIncrement(1);
+            slider.setProgress(corners[i]);
+            slider.setContentDescription(label.getText());
+            slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override public void onProgressChanged(SeekBar bar, int value, boolean fromUser) {
+                    corners[index] = value;
+                    label.setText(getString(cornerLabels[index], value));
+                    bar.setContentDescription(label.getText());
+                    selected[0] = IconShape.CUSTOM;
+                    render.run();
+                }
+                @Override public void onStartTrackingTouch(SeekBar bar) {}
+                @Override public void onStopTrackingTouch(SeekBar bar) {}
+            });
+            editor.addView(slider, new LinearLayout.LayoutParams(-1, dp(48)));
+        }
+        java.util.function.Consumer<Boolean> showTab = custom -> {
+            options.setVisibility(custom ? View.GONE : View.VISIBLE);
+            editor.setVisibility(custom ? View.VISIBLE : View.GONE);
+            for (Button tab : new Button[]{presetsTab, editorTab}) {
+                boolean active = (tab == editorTab) == custom;
+                tab.setSelected(active);
+                tab.setBackground(buttonSurface(active ? ACCENT : CONTROL, 20));
+                tab.setTextColor(active ? Color.BLACK : ACCENT_TEXT);
+                tab.setStateDescription(getString(active ? R.string.option_selected : R.string.option_not_selected));
+            }
+        };
+        presetsTab.setOnClickListener(view -> {
+            showTab.accept(false);
+            selected[0] = preset[0] == null ? IconShape.CUSTOM : preset[0];
+            render.run();
+        });
+        editorTab.setOnClickListener(view -> {
+            showTab.accept(true);
+            selected[0] = IconShape.CUSTOM;
+            render.run();
+        });
+        showTab.accept(draft.shape == IconShape.CUSTOM);
         LinearLayout line = null;
         for (int i = 0; i < shapes.size(); i++) {
             if (i % 4 == 0) {
@@ -825,7 +901,7 @@ public final class MainActivity extends Activity {
             label.setGravity(Gravity.CENTER);
             label.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
             choice.addView(label, new LinearLayout.LayoutParams(-1, -2));
-            View.OnClickListener select = view -> { selected[0] = shape; render.run(); };
+            View.OnClickListener select = view -> { preset[0] = shape; selected[0] = shape; render.run(); };
             choice.setOnClickListener(select);
             label.setOnClickListener(select);
             line.addView(choice, new LinearLayout.LayoutParams(0, -2, 1));
@@ -833,9 +909,13 @@ public final class MainActivity extends Activity {
         }
         while (line.getChildCount() < 4) line.addView(new View(this), new LinearLayout.LayoutParams(0, 0, 1));
         Button apply = button(R.string.apply_settings, view -> {
-            if (draft.shape != selected[0] || draft.overlayScale != overlayScale[0]) {
+            boolean custom = selected[0] == IconShape.CUSTOM;
+            if (draft.shape != selected[0] || draft.overlayScale != overlayScale[0] || draft.overlayClip != overlayClip[0]
+                    || custom && !java.util.Arrays.equals(draft.corners, corners)) {
                 draft.shape = selected[0];
+                if (custom) draft.corners = corners.clone();
                 draft.overlayScale = overlayScale[0];
+                draft.overlayClip = overlayClip[0];
                 saveDraft();
                 refresh();
             }
@@ -955,13 +1035,17 @@ public final class MainActivity extends Activity {
         LinearLayout content = scrollingDialogLayout(dialog, getString(R.string.overlay_title));
         content.addView(text(getString(R.string.overlay_help), 14, MUTED));
         Bitmap source = IconShape.previewSource(getDrawable(R.drawable.app_icon));
-        Bitmap base = draft.shape.preview(source);
+        Bitmap base = draft.shape.preview(source, IconShape.SIZE - 2 * IconShape.INSET, draft.corners);
         source.recycle();
         int[] scale = {draft.overlayScale};
         Bitmap[] preview = {base.copy(Bitmap.Config.ARGB_8888, true)};
         Bitmap initialOverlay = IconOverlay.scaled(overlay, scale[0]);
-        try { IconOverlay.draw(preview[0], initialOverlay); }
-        finally { initialOverlay.recycle(); }
+        try {
+            Bitmap border = IconOverlay.border(initialOverlay, draft.shape, draft.corners,
+                    IconShape.SIZE - 2 * IconShape.INSET, draft.overlayClip);
+            try { IconOverlay.draw(preview[0], border); }
+            finally { border.recycle(); }
+        } finally { initialOverlay.recycle(); }
         ImageView image = new ImageView(this);
         image.setImageBitmap(preview[0]);
         image.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -1555,12 +1639,13 @@ public final class MainActivity extends Activity {
         if (draft.overlayAll && !draft.overlay.isEmpty()) {
             String overlayReference = draft.overlay;
             int overlayScale = draft.overlayScale;
-            String key = "file-preview:" + appKey + ":" + overlayReference + ":" + overlayScale;
+            boolean overlayClip = draft.overlayClip;
+            String key = "file-preview:" + appKey + ":" + overlayReference + ":" + overlayScale + ":" + overlayClip;
             preview.setTag(key);
             Bitmap rendering = image.copy(Bitmap.Config.ARGB_8888, true);
             thumbnails.execute(() -> {
                 try {
-                    Bitmap bitmap = withPreviewOverlay(rendering, overlayReference, overlayScale);
+                    Bitmap bitmap = withPreviewOverlay(rendering, overlayReference, overlayScale, overlayClip);
                     runOnUiThread(() -> {
                         if (!isDestroyed() && dialog.isShowing()) preview.setImageBitmap(bitmap);
                         else bitmap.recycle();
@@ -1606,10 +1691,12 @@ public final class MainActivity extends Activity {
     private void bindSystemImage(ImageView view, IconRepository.App app) {
         String overlayReference = draft.overlay;
         int overlayScale = draft.overlayScale;
+        boolean overlayClip = draft.overlayClip;
         IconShape shape = draft.shape;
+        int[] corners = draft.corners.clone();
         IconRepository.Pack currentPack = pack;
-        String key = "system:" + app.key() + ":shape:" + shape + ":" + String.join(",", draft.packs)
-                + ":overlay:" + overlayReference + ":" + overlayScale;
+        String key = "system:" + app.key() + ":shape:" + shapeKey(shape, corners) + ":" + String.join(",", draft.packs)
+                + ":overlay:" + overlayReference + ":" + overlayScale + ":" + overlayClip;
         view.setTag(key);
         view.setImageResource(R.drawable.app_icon);
         Bitmap cached = images.get(key);
@@ -1618,7 +1705,8 @@ public final class MainActivity extends Activity {
             try {
                 var icon = IconRepository.unthemedIcon(getPackageManager(), app.component());
                 int visibleSize = currentPack == null ? IconShape.SIZE - 2 * IconShape.INSET : currentPack.fallbackSize();
-                Bitmap bitmap = withPreviewOverlay(shape.preview(icon, visibleSize), overlayReference, overlayScale);
+                Bitmap bitmap = withFallbackOverlay(shape.preview(icon, visibleSize, corners), overlayReference,
+                        overlayScale, shape, corners, visibleSize, overlayClip);
                 images.put(key, bitmap);
                 runOnUiThread(() -> { if (!isDestroyed() && key.equals(view.getTag())) view.setImageBitmap(bitmap); });
             } catch (android.content.pm.PackageManager.NameNotFoundException ignored) {
@@ -1636,9 +1724,10 @@ public final class MainActivity extends Activity {
     private void bindImage(ImageView view, IconRepository.Pack current, String name) {
         String overlayReference = draft.overlayAll ? draft.overlay : "";
         int overlayScale = draft.overlayScale;
+        boolean overlayClip = draft.overlayClip;
         String key = (name == null ? "" : IconRepository.reference(
                 IconRepository.sourcePackage(name, current.packageName), IconRepository.resourceName(name)))
-                + ":overlay:" + overlayReference + ":" + overlayScale;
+                + ":overlay:" + overlayReference + ":" + overlayScale + ":" + overlayClip;
         view.setTag(key);
         view.setImageResource(R.drawable.app_icon);
         if (name == null) return;
@@ -1646,7 +1735,7 @@ public final class MainActivity extends Activity {
         if (cached != null) { view.setImageBitmap(cached); return; }
         thumbnails.execute(() -> {
             try {
-                Bitmap bitmap = withPreviewOverlay(current.render(name, 128), overlayReference, overlayScale);
+                Bitmap bitmap = withPreviewOverlay(current.render(name, 128), overlayReference, overlayScale, overlayClip);
                 images.put(key, bitmap);
                 runOnUiThread(() -> { if (!isDestroyed() && key.equals(view.getTag())) view.setImageBitmap(bitmap); });
             } catch (IOException | RuntimeException error) {
@@ -1655,16 +1744,38 @@ public final class MainActivity extends Activity {
         });
     }
 
-    private Bitmap withPreviewOverlay(Bitmap image, String reference, int scale) throws IOException {
+    private Bitmap withPreviewOverlay(Bitmap image, String reference, int scale, boolean clip) throws IOException {
         try {
             Bitmap overlay = IconOverlay.load(this, reference, scale);
-            try { IconOverlay.draw(image, overlay); }
+            try { IconOverlay.draw(image, overlay, clip); }
             finally { if (overlay != null) overlay.recycle(); }
             return image;
         } catch (IOException | RuntimeException error) {
             image.recycle();
             throw error;
         }
+    }
+
+    /** Mirrors the exported icon_border.png on an icon masked by the fallback shape. */
+    private Bitmap withFallbackOverlay(Bitmap image, String reference, int scale, IconShape shape, int[] corners,
+                                       int visibleSize, boolean clip) throws IOException {
+        try {
+            Bitmap overlay = IconOverlay.load(this, reference, scale);
+            if (overlay == null) return image;
+            try {
+                Bitmap border = IconOverlay.border(overlay, shape, corners, visibleSize, clip);
+                try { IconOverlay.draw(image, border); }
+                finally { border.recycle(); }
+            } finally { overlay.recycle(); }
+            return image;
+        } catch (IOException | RuntimeException error) {
+            image.recycle();
+            throw error;
+        }
+    }
+
+    private static String shapeKey(IconShape shape, int[] corners) {
+        return shape == IconShape.CUSTOM ? shape + java.util.Arrays.toString(corners) : shape.name();
     }
 
     private void reportImageError(ImageView view, String key, String name, Exception error) {
@@ -1706,14 +1817,17 @@ public final class MainActivity extends Activity {
             Bitmap cover = null;
             Bitmap overlay = IconOverlay.load(this, snapshot.overlay, snapshot.overlayScale);
             try {
-                if (coverPath.isEmpty()) cover = ThemeEngine.cover(currentPack, apps, overrides, snapshot.overlayAll ? overlay : null);
+                if (coverPath.isEmpty()) cover = ThemeEngine.cover(currentPack, apps, overrides,
+                        snapshot.overlayAll ? overlay : null, snapshot.overlayClip);
                 else {
                     cover = BitmapFactory.decodeFile(new File(getFilesDir(), coverPath).getPath());
                     if (cover == null) throw new IOException(App.text(R.string.cover_read_error));
                 }
-                ThemeEngine.Result result = ThemeEngine.export(this, outputTitle, outputName, fullPack, shape, clearFolderBackground, currentPack, apps, overrides,
+                ThemeEngine.Result result = ThemeEngine.export(this, outputTitle, outputName, fullPack, shape,
+                        snapshot.corners, clearFolderBackground, currentPack, apps, overrides,
                         cover, tree, null, snapshot.wallpaperPath.isEmpty() ? null
-                                : new File(getFilesDir(), snapshot.wallpaperPath), overlay, snapshot.overlayAll, (done, total) -> {
+                                : new File(getFilesDir(), snapshot.wallpaperPath), overlay, snapshot.overlayAll,
+                        snapshot.overlayClip, (done, total) -> {
                             if (done == 1 || done == total || done % 10 == 0) runOnUiThread(() -> {
                                 if (!isDestroyed()) {
                                     String message = done == total ? getString(R.string.export_finishing)

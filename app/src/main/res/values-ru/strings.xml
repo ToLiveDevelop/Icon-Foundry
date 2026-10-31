@@ -88,6 +88,19 @@
     <string name="shape_star">Звезда</string>
     <string name="shape_hexagon">Шестиугольник</string>
     <string name="shape_pentagon">Скруглённый пятиугольник</string>
+    <string name="shape_custom">Своя форма</string>
+    <string name="shape_tab_presets">Готовые формы</string>
+    <string name="shape_tab_editor">Редактор</string>
+    <string name="shape_editor">Редактор формы</string>
+    <string name="shape_editor_help" formatted="false">Скругление каждого угла: 0% — острый угол, 100% — половина стороны. 100% во всех углах дают круг.</string>
+    <string name="corner_top_left">Левый верхний угол: %1$d%%</string>
+    <string name="corner_top_right">Правый верхний угол: %1$d%%</string>
+    <string name="corner_bottom_right">Правый нижний угол: %1$d%%</string>
+    <string name="corner_bottom_left">Левый нижний угол: %1$d%%</string>
+    <string name="corners_invalid" formatted="false">Скругление углов должно быть от 0% до 100%.</string>
+    <string name="overlay_clip">Обрезать накладку по форме</string>
+    <string name="overlay_clip_help">Части накладки за пределами формы не показываются. Иконки из пака обрезаются по своему контуру.</string>
+    <string name="overlay_clipped_empty">После масштабирования и обрезки от накладки ничего не осталось.</string>
     <string name="choose_shape">Выбрать форму</string>
     <string name="current_shape">Выбрать форму · %1$s</string>
     <string name="shape_preview_help">Системные иконки приложений без замены из пака, по алфавиту. Если их меньше шести, добавляются остальные приложения. До нажатия «Применить» форма и накладка меняют только предпросмотр.</string>

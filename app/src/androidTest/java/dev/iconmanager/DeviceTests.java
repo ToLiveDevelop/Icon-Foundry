@@ -609,6 +609,34 @@ public final class DeviceTests extends Instrumentation {
             draft.shape = shape;
             check(Draft.fromJson(draft.toJson()).shape == shape, "Every shape retains its stable template identifier");
         }
+        Draft custom = new Draft();
+        check(!custom.toJson().has("corners") && !custom.toJson().has("overlayClip") && custom.overlayClip,
+                "Preset drafts keep legacy fingerprints and clip overlays by default");
+        custom.shape = IconShape.CUSTOM;
+        custom.corners = new int[]{0, 25, 75, 100};
+        check(java.util.Arrays.equals(Draft.fromJson(custom.toJson()).corners, custom.corners),
+                "Custom corner radii round-trip through templates");
+        expectFailure(() -> Draft.fromJson(custom.toJson().put("corners", new org.json.JSONArray(List.of(0, 1, 101, 2)))),
+                "Corner radius above 100 percent is rejected");
+        expectFailure(() -> Draft.fromJson(custom.toJson().put("corners", new org.json.JSONArray(List.of(0, 1, 2)))),
+                "Corner list must contain exactly four values");
+        custom.overlay = "fileicon:test";
+        custom.overlayClip = false;
+        check(!Draft.fromJson(custom.toJson()).overlayClip, "Disabled overlay clipping round-trips");
+        Bitmap round = IconShape.CUSTOM.mask(172, new int[]{100, 100, 100, 100});
+        Bitmap circle = IconShape.CIRCLE.mask(172);
+        Bitmap sharp = IconShape.CUSTOM.mask(172, new int[]{0, 0, 0, 0});
+        try {
+            int different = 0;
+            for (int y = 0; y < 192; y++) for (int x = 0; x < 192; x++) {
+                if (Math.abs(android.graphics.Color.alpha(round.getPixel(x, y))
+                        - android.graphics.Color.alpha(circle.getPixel(x, y))) > 128) different++;
+            }
+            check(different < 40, "All four corners at 100 percent produce a circle");
+            check(android.graphics.Color.alpha(sharp.getPixel(10, 10)) == 255
+                            && android.graphics.Color.alpha(sharp.getPixel(181, 181)) == 255,
+                    "All corners at 0 percent produce a sharp square");
+        } finally { round.recycle(); circle.recycle(); sharp.recycle(); }
     }
 
     private void verifyShapePickerUi(MainActivity activity) throws Exception {
@@ -618,6 +646,7 @@ public final class DeviceTests extends Instrumentation {
         isolated.shape = IconShape.ROUNDED_SQUARE;
         isolated.overlay = "";
         isolated.overlayScale = 100;
+        isolated.overlayClip = true;
         String savedJson = activity.getSharedPreferences("draft", 0).getString("json", "");
         var build = MainActivity.class.getDeclaredMethod("buildScreen");
         build.setAccessible(true);
@@ -645,7 +674,13 @@ public final class DeviceTests extends Instrumentation {
                 try {
                     check(decor.findViewWithTag(IconShape.ROUNDED_SQUARE).isSelected(),
                             "Popup initially selects the saved shape");
+                    check(decor.findViewWithTag("overlay-clip") == null,
+                            "Shape popup has no overlay clip toggle without an overlay");
+                    check(decor.findViewWithTag("shape-editor").getVisibility() != android.view.View.VISIBLE
+                                    && decor.findViewWithTag("shape-tab-presets").isSelected(),
+                            "Preset shapes tab opens first for a preset shape");
                     for (IconShape shape : IconShape.values()) {
+                        if (shape == IconShape.CUSTOM) continue;
                         android.view.View tile = decor.findViewWithTag(shape);
                         check(tile != null && tile.getContentDescription().equals(activity.getString(shape.label)),
                                 "Each exported shape has a labelled illustration tile");
@@ -718,9 +753,64 @@ public final class DeviceTests extends Instrumentation {
                 android.app.Dialog dialog = (android.app.Dialog) field(activity, "shapeDialog");
                 check(dialog.getWindow().getDecorView().findViewWithTag(IconShape.HEART).isSelected(),
                         "Reopened popup selects the applied shape");
-                check(((android.widget.SeekBar) dialog.getWindow().getDecorView().findViewWithTag("overlay-scale"))
+                android.view.View decor = dialog.getWindow().getDecorView();
+                check(((android.widget.SeekBar) decor.findViewWithTag("overlay-scale"))
                                 .getProgress() == 120, "Reopened popup restores applied overlay scale");
+                android.widget.CheckBox clip = decor.findViewWithTag("overlay-clip");
+                check(clip != null && clip.isChecked(), "Overlay clip toggle is shown and enabled by default");
+                android.widget.ImageView scene = decor.findViewWithTag("shape-scene");
+                Bitmap before = ((android.graphics.drawable.BitmapDrawable) scene.getDrawable()).getBitmap()
+                        .copy(Bitmap.Config.ARGB_8888, false);
+                android.widget.SeekBar scaleBar = decor.findViewWithTag("overlay-scale");
+                scaleBar.setProgress(149);
+                scaleBar.onKeyDown(android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                        new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_RIGHT));
+                Bitmap scaled = ((android.graphics.drawable.BitmapDrawable) scene.getDrawable()).getBitmap()
+                        .copy(Bitmap.Config.ARGB_8888, false);
+                clip.setChecked(false);
+                try {
+                    check(!scaled.sameAs(((android.graphics.drawable.BitmapDrawable) scene.getDrawable()).getBitmap()),
+                            "Overlay clip toggle immediately updates the preview scene");
+                } finally { before.recycle(); scaled.recycle(); }
+                decor.findViewWithTag("shape-tab-editor").performClick();
+                check(decor.findViewWithTag("shape-editor").getVisibility() == android.view.View.VISIBLE
+                                && !decor.findViewWithTag(IconShape.HEART).isShown(),
+                        "Editor tab replaces preset shapes with the corner editor");
+                Bitmap editorStart = ((android.graphics.drawable.BitmapDrawable) scene.getDrawable()).getBitmap()
+                        .copy(Bitmap.Config.ARGB_8888, false);
+                int[] wanted = {0, 100, 50, 10};
+                for (int i = 0; i < 4; i++)
+                    ((android.widget.SeekBar) decor.findViewWithTag("corner-" + i)).setProgress(wanted[i]);
+                try {
+                    check(!editorStart.sameAs(((android.graphics.drawable.BitmapDrawable) scene.getDrawable()).getBitmap()),
+                            "Corner sliders immediately update the preview scene");
+                } finally { editorStart.recycle(); }
+                check(isolated.shape == IconShape.HEART && isolated.overlayClip,
+                        "Editor changes are not saved before Apply");
+                findText(decor, activity.getString(R.string.apply_settings)).performClick();
+                Draft saved = Draft.load(activity);
+                check(isolated.shape == IconShape.CUSTOM && saved.shape == IconShape.CUSTOM
+                                && java.util.Arrays.equals(saved.corners, wanted),
+                        "Apply saves the custom corner shape");
+                check(!saved.overlayClip && saved.overlayScale == 150,
+                        "Apply persists overlay clip and 150% scale");
+                ((android.view.View) field(activity, "shapeButton")).performClick();
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "shapeDialog");
+                android.view.View decor = dialog.getWindow().getDecorView();
+                check(decor.findViewWithTag("shape-tab-editor").isSelected()
+                                && decor.findViewWithTag("shape-editor").getVisibility() == android.view.View.VISIBLE
+                                && ((android.widget.SeekBar) decor.findViewWithTag("corner-2")).getProgress() == 50
+                                && !((android.widget.CheckBox) decor.findViewWithTag("overlay-clip")).isChecked(),
+                        "Reopened popup restores editor tab, corners and clip toggle");
+                ((android.widget.SeekBar) decor.findViewWithTag("corner-0")).setProgress(70);
+                decor.findViewWithTag("shape-tab-presets").performClick();
+                decor.findViewWithTag(IconShape.CIRCLE).performClick();
                 dialog.dismiss();
+                check(isolated.shape == IconShape.CUSTOM && isolated.corners[0] == 0,
+                        "Cancelling discards editor and preset changes");
             });
         } finally {
             runOnMainChecked(() -> {
@@ -857,6 +947,7 @@ public final class DeviceTests extends Instrumentation {
         String previousOverlay = draft.overlay;
         boolean previousAll = draft.overlayAll;
         int previousScale = draft.overlayScale;
+        boolean previousClip = draft.overlayClip;
         Map<String, String> previousOverrides = new LinkedHashMap<>(draft.overrides);
         Bitmap file = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
         file.eraseColor(android.graphics.Color.BLUE);
@@ -873,16 +964,17 @@ public final class DeviceTests extends Instrumentation {
                 android.widget.ImageView.class, IconRepository.App.class);
         bind.setAccessible(true); bindSystem.setAccessible(true);
         try {
-            for (String mode : List.of("fallback", "all", "scaled", "removed", "changed", "fallback", "all")) {
-                boolean all = mode.equals("all") || mode.equals("changed") || mode.equals("scaled");
-                int scale = mode.equals("scaled") ? 120 : 100;
+            for (String mode : List.of("fallback", "all", "scaled", "unclipped", "removed", "changed", "fallback", "all")) {
+                boolean all = mode.equals("all") || mode.equals("changed") || mode.equals("scaled") || mode.equals("unclipped");
+                boolean clip = !mode.equals("unclipped");
+                int scale = mode.equals("scaled") ? 120 : mode.equals("unclipped") ? 150 : 100;
                 String overlayReference = mode.equals("removed") ? ""
                         : mode.equals("changed") ? otherReference : previousOverlay;
                 android.widget.ImageView[] views = new android.widget.ImageView[4];
                 Bitmap[] placeholder = new Bitmap[1];
                 runOnMainChecked(() -> {
                     draft.overlayAll = all; draft.overlay = overlayReference;
-                    draft.overlayScale = scale;
+                    draft.overlayScale = scale; draft.overlayClip = clip;
                     for (int i = 0; i < views.length; i++) views[i] = new android.widget.ImageView(activity);
                     bind.invoke(activity, views[0], source, icon);
                     bind.invoke(activity, views[1], pack, fileReference);
@@ -895,9 +987,13 @@ public final class DeviceTests extends Instrumentation {
                 IconRepository.Pack activePack = (IconRepository.Pack) field(activity, "pack");
                 Bitmap[] expected = {source.render(icon, 128), pack.render(fileReference, 128),
                         draft.shape.preview(IconRepository.unthemedIcon(activity.getPackageManager(), app.component()),
-                                activePack.fallbackSize())};
+                                activePack.fallbackSize(), draft.corners)};
                 try {
-                    for (int i = 0; i < expected.length; i++) if (i == 2 || all) IconOverlay.draw(expected[i], overlay);
+                    for (int i = 0; i < 2; i++) if (all) IconOverlay.draw(expected[i], overlay, clip);
+                    if (overlay != null) {
+                        Bitmap border = IconOverlay.border(overlay, draft.shape, draft.corners, activePack.fallbackSize(), clip);
+                        try { IconOverlay.draw(expected[2], border); } finally { border.recycle(); }
+                    }
                     runOnMainChecked(() -> {
                         for (int i = 0; i < expected.length; i++) {
                             Bitmap actual = ((android.graphics.drawable.BitmapDrawable) views[i].getDrawable()).getBitmap();
@@ -978,6 +1074,7 @@ public final class DeviceTests extends Instrumentation {
                 }
                 draft.overlay = previousOverlay; draft.overlayAll = previousAll;
                 draft.overlayScale = previousScale;
+                draft.overlayClip = previousClip;
                 draft.overrides.clear(); draft.overrides.putAll(previousOverrides);
             });
             file.recycle();
@@ -986,7 +1083,7 @@ public final class DeviceTests extends Instrumentation {
 
     private Bitmap withOverlay(Context context, Bitmap image, String reference) throws Exception {
         Bitmap overlay = IconOverlay.load(context, reference);
-        try { IconOverlay.draw(image, overlay); return image; }
+        try { IconOverlay.draw(image, overlay, true); return image; }
         finally { if (overlay != null) overlay.recycle(); }
     }
 
@@ -1152,6 +1249,49 @@ public final class DeviceTests extends Instrumentation {
                     }
                     check(borderFound && appFound, "Scaled overlay archive contains native border and application icon");
                 } finally { Files.deleteIfExists(scaledTheme.file().toPath()); }
+                Bitmap full = IconOverlay.load(isolated, paddedReference, 150);
+                try {
+                    expectFailure(() -> IconOverlay.validate(full), "150 percent padded overlay has no transparent source pixel");
+                    int[] corners = {100, 100, 100, 100};
+                    Bitmap clippedBorder = IconOverlay.border(full, IconShape.CUSTOM, corners, pack.fallbackSize(), true);
+                    Bitmap plainBorder = IconOverlay.border(full, IconShape.CUSTOM, corners, pack.fallbackSize(), false);
+                    try {
+                        check(plainBorder.sameAs(full), "Unclipped border keeps the scaled overlay unchanged");
+                        check(android.graphics.Color.alpha(clippedBorder.getPixel(2, 2)) == 0
+                                        && android.graphics.Color.alpha(clippedBorder.getPixel(96, 96)) > 0,
+                                "Clipped border is hidden outside the fallback shape and kept inside it");
+                    } finally { clippedBorder.recycle(); plainBorder.recycle(); }
+                    ThemeEngine.Built fullTheme = ThemeEngine.build(isolated, "Clipped overlay", false,
+                            IconShape.CUSTOM, corners, false, pack, List.of(scaledApp), scaledOverrides,
+                            cover, null, full, true, true, (done, total) -> {});
+                    try (ZipFile archive = new ZipFile(fullTheme.file());
+                         ZipInputStream icons = new ZipInputStream(archive.getInputStream(archive.getEntry("icons")))) {
+                        boolean borderFound = false, appFound = false;
+                        for (ZipEntry entry; (entry = icons.getNextEntry()) != null;) {
+                            byte[] bytes = icons.readAllBytes();
+                            if (entry.getName().equals("icon_border.png")) {
+                                Bitmap actual = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                                Bitmap expected = IconOverlay.border(full, IconShape.CUSTOM, corners, pack.fallbackSize(), true);
+                                try { check(actual.sameAs(expected), "150 percent overlay exports a shape-clipped border"); }
+                                finally { actual.recycle(); expected.recycle(); }
+                                borderFound = true;
+                            } else if (entry.getName().equals("dev.test.scaled.png")) {
+                                Bitmap actual = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                                Bitmap packIcon = pack.render(scaledOverrides.get(scaledApp.key()), 192);
+                                try {
+                                    boolean inside = true;
+                                    for (int y = 0; y < 192; y++) for (int x = 0; x < 192; x++) {
+                                        if (android.graphics.Color.alpha(packIcon.getPixel(x, y)) == 0
+                                                && android.graphics.Color.alpha(actual.getPixel(x, y)) != 0) inside = false;
+                                    }
+                                    check(inside, "Clipped baked overlay never paints outside the pack icon");
+                                } finally { actual.recycle(); packIcon.recycle(); }
+                                appFound = true;
+                            }
+                        }
+                        check(borderFound && appFound, "150 percent clipped overlay theme builds successfully");
+                    } finally { Files.deleteIfExists(fullTheme.file().toPath()); }
+                } finally { full.recycle(); }
                 List<IconRepository.App> examples = ShapePreview.examples(new IconRepository(context).apps(),
                         pack, Map.of(), java.util.Locale.ENGLISH);
                 try (ShapePreview normalScene = ShapePreview.load(isolated, examples, pack.fallbackSize(), "", paddedReference);

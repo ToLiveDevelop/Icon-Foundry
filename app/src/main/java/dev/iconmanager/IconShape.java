@@ -20,11 +20,15 @@ enum IconShape {
     HEART(R.string.shape_heart),
     STAR(R.string.shape_star),
     HEXAGON(R.string.shape_hexagon),
-    PENTAGON(R.string.shape_pentagon);
+    PENTAGON(R.string.shape_pentagon),
+    CUSTOM(R.string.shape_custom);
 
     final int label;
     static final int SIZE = 192;
     static final int INSET = 10;
+    static final int MAX_CORNER = 100;
+    /** Corner radii in percent of half the side: top-left, top-right, bottom-right, bottom-left. */
+    static final int[] DEFAULT_CORNERS = {30, 30, 30, 30};
     private static final float ROUND_RADIUS = .22f;
 
     IconShape(int label) { this.label = label; }
@@ -50,13 +54,17 @@ enum IconShape {
 
     Bitmap preview(Bitmap source) { return preview(source, SIZE - 2 * INSET); }
 
-    Bitmap preview(Drawable drawable, int visibleSize) {
+    Bitmap preview(Drawable drawable, int visibleSize) { return preview(drawable, visibleSize, null); }
+
+    Bitmap preview(Drawable drawable, int visibleSize, int[] corners) {
         Bitmap source = previewSource(drawable, this != NONE);
-        try { return preview(source, visibleSize); }
+        try { return preview(source, visibleSize, corners); }
         finally { source.recycle(); }
     }
 
-    Bitmap preview(Bitmap source, int visibleSize) {
+    Bitmap preview(Bitmap source, int visibleSize) { return preview(source, visibleSize, null); }
+
+    Bitmap preview(Bitmap source, int visibleSize, int[] corners) {
         Bitmap result = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(result);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
@@ -75,7 +83,7 @@ enum IconShape {
                 : new Rect(cx - extent / 2, cy - extent / 2, cx - extent / 2 + extent, cy - extent / 2 + extent);
         canvas.drawBitmap(source, crop, new Rect(0, 0, SIZE, SIZE), paint);
         if (this != NONE) {
-            Bitmap mask = mask(visibleSize);
+            Bitmap mask = mask(visibleSize, corners);
             try {
                 paint.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN));
                 canvas.drawBitmap(mask, 0, 0, paint);
@@ -86,7 +94,18 @@ enum IconShape {
 
     Bitmap mask() { return mask(SIZE - 2 * INSET); }
 
-    Bitmap mask(int visibleSize) {
+    Bitmap mask(int visibleSize) { return mask(visibleSize, null); }
+
+    static int[] validCorners(int[] corners) {
+        if (corners == null || corners.length != 4) throw new IllegalArgumentException(App.text(R.string.corners_invalid));
+        for (int corner : corners) {
+            if (corner < 0 || corner > MAX_CORNER) throw new IllegalArgumentException(App.text(R.string.corners_invalid));
+        }
+        return corners.clone();
+    }
+
+    /** Corners are used only by {@link #CUSTOM}; null means the editor defaults. */
+    Bitmap mask(int visibleSize, int[] corners) {
         if (visibleSize < 1 || visibleSize > SIZE) throw new IllegalArgumentException(App.text(R.string.shape_size_invalid));
         if (this == NONE) throw new IllegalStateException(App.text(R.string.shape_not_selected));
         Path path = new Path();
@@ -94,6 +113,12 @@ enum IconShape {
             case CIRCLE -> path.addCircle(.5f, .5f, .5f, Path.Direction.CW);
             case ROUNDED_SQUARE -> path.addRoundRect(0, 0, 1, 1, ROUND_RADIUS, ROUND_RADIUS, Path.Direction.CW);
             case SQUARE -> path.addRoundRect(0, 0, 1, 1, ROUND_RADIUS / 2, ROUND_RADIUS / 2, Path.Direction.CW);
+            case CUSTOM -> {
+                int[] c = validCorners(corners == null ? DEFAULT_CORNERS : corners);
+                float[] radii = new float[8];
+                for (int i = 0; i < 4; i++) radii[2 * i] = radii[2 * i + 1] = c[i] / 200f;
+                path.addRoundRect(0, 0, 1, 1, radii, Path.Direction.CW);
+            }
             case TEARDROP -> path.addRoundRect(0, 0, 1, 1,
                     new float[]{.5f, .5f, .5f, .5f, .12f, .12f, .5f, .5f}, Path.Direction.CW);
             case HEART -> {

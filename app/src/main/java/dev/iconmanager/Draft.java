@@ -23,7 +23,9 @@ final class Draft {
     String overlay = "";
     boolean overlayAll;
     int overlayScale = 100;
+    boolean overlayClip = true;
     IconShape shape = IconShape.ROUNDED_SQUARE;
+    int[] corners = IconShape.DEFAULT_CORNERS.clone();
     final Map<String, String> overrides = new LinkedHashMap<>();
 
     static Draft load(Context context) throws JSONException {
@@ -52,6 +54,15 @@ final class Draft {
         d.overlayScale = j.optInt("overlayScale", 100);
         if (d.overlayScale < IconOverlay.MIN_SCALE || d.overlayScale > IconOverlay.MAX_SCALE) {
             throw new JSONException(App.text(R.string.overlay_scale_invalid));
+        }
+        d.overlayClip = j.optBoolean("overlayClip", true);
+        JSONArray corners = j.optJSONArray("corners");
+        if (corners != null) {
+            if (corners.length() != 4) throw new JSONException(App.text(R.string.corners_invalid));
+            int[] values = new int[4];
+            for (int i = 0; i < 4; i++) values[i] = corners.getInt(i);
+            try { d.corners = IconShape.validCorners(values); }
+            catch (IllegalArgumentException error) { throw new JSONException(error.getMessage()); }
         }
         try {
             d.shape = IconShape.valueOf(j.optString("shape", IconShape.NONE.name()));
@@ -125,6 +136,12 @@ final class Draft {
         if (systemIcons) j.put("systemIcons", true);
         if (!overlay.isEmpty()) j.put("overlay", overlay).put("overlayAll", overlayAll);
         if (!overlay.isEmpty() && overlayScale != 100) j.put("overlayScale", overlayScale);
+        if (!overlay.isEmpty() && !overlayClip) j.put("overlayClip", false);
+        if (shape == IconShape.CUSTOM) {
+            JSONArray values = new JSONArray();
+            for (int corner : corners) values.put(corner);
+            j.put("corners", values);
+        }
         return j;
     }
 

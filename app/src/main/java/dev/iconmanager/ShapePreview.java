@@ -93,6 +93,10 @@ final class ShapePreview implements AutoCloseable {
     }
 
     Bitmap render(IconShape shape, int overlayScale) {
+        return render(shape, null, overlayScale, false);
+    }
+
+    Bitmap render(IconShape shape, int[] corners, int overlayScale, boolean overlayClip) {
         Bitmap result = Bitmap.createBitmap(WIDTH, HEIGHT, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(result);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
@@ -113,10 +117,15 @@ final class ShapePreview implements AutoCloseable {
         text.setTextSize(25);
         text.setTextAlign(Paint.Align.CENTER);
         text.setShadowLayer(4, 0, 2, Color.BLACK);
-        Bitmap layer = overlay == null ? null : IconOverlay.scaled(overlay, overlayScale);
+        Bitmap layer = null;
+        if (overlay != null) {
+            Bitmap scaled = IconOverlay.scaled(overlay, overlayScale);
+            try { layer = IconOverlay.border(scaled, shape, corners, visibleSize, overlayClip); }
+            finally { scaled.recycle(); }
+        }
         try {
             for (int i = 0; i < originals.size(); i++) {
-                Bitmap icon = shape.preview((shape == IconShape.NONE ? originals : unmasked).get(i), visibleSize);
+                Bitmap icon = shape.preview((shape == IconShape.NONE ? originals : unmasked).get(i), visibleSize, corners);
                 try {
                     IconOverlay.draw(icon, layer);
                     int cx = 120 + i % 3 * 240, top = 40 + i / 3 * 208;

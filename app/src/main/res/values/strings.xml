@@ -88,6 +88,19 @@
     <string name="shape_star">Star</string>
     <string name="shape_hexagon">Hexagon</string>
     <string name="shape_pentagon">Rounded pentagon</string>
+    <string name="shape_custom">Custom shape</string>
+    <string name="shape_tab_presets">Presets</string>
+    <string name="shape_tab_editor">Editor</string>
+    <string name="shape_editor">Shape editor</string>
+    <string name="shape_editor_help" formatted="false">Rounding of each corner: 0% is a sharp corner, 100% is half the side. 100% on all corners makes a circle.</string>
+    <string name="corner_top_left">Top-left corner: %1$d%%</string>
+    <string name="corner_top_right">Top-right corner: %1$d%%</string>
+    <string name="corner_bottom_right">Bottom-right corner: %1$d%%</string>
+    <string name="corner_bottom_left">Bottom-left corner: %1$d%%</string>
+    <string name="corners_invalid" formatted="false">Corner rounding must be between 0% and 100%.</string>
+    <string name="overlay_clip">Clip overlay to shape</string>
+    <string name="overlay_clip_help">Parts of the overlay outside the shape are hidden. Pack icons are clipped to their own outline.</string>
+    <string name="overlay_clipped_empty">Nothing of the overlay remains after scaling and clipping.</string>
     <string name="choose_shape">Choose shape</string>
     <string name="current_shape">Choose shape · %1$s</string>
     <string name="shape_preview_help">System icons without pack replacements, in alphabetical order. If fewer than six are available, other apps are added. The shape and overlay affect only this preview until you tap Apply.</string>
