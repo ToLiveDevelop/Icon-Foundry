@@ -26,6 +26,7 @@ final class ShapePreview implements AutoCloseable {
     private final List<String> labels = new ArrayList<>();
     private Bitmap wallpaper, overlay;
     private final int visibleSize;
+    private int overlayScale = 100;
 
     private ShapePreview(int visibleSize) { this.visibleSize = visibleSize; }
 
@@ -49,6 +50,11 @@ final class ShapePreview implements AutoCloseable {
 
     static ShapePreview load(Context context, List<IconRepository.App> examples, int visibleSize,
                              String wallpaperPath, String overlayReference) throws IOException {
+        return load(context, examples, visibleSize, wallpaperPath, overlayReference, 100);
+    }
+
+    static ShapePreview load(Context context, List<IconRepository.App> examples, int visibleSize,
+                             String wallpaperPath, String overlayReference, int overlayScale) throws IOException {
         ShapePreview preview = new ShapePreview(visibleSize);
         try {
             if (examples.isEmpty()) throw new IOException(context.getString(R.string.shape_no_apps));
@@ -59,6 +65,7 @@ final class ShapePreview implements AutoCloseable {
                 preview.labels.add(app.label());
             }
             preview.overlay = IconOverlay.load(context, overlayReference);
+            preview.overlayScale = overlayScale;
             if (!wallpaperPath.isEmpty()) {
                 File file = new File(context.getFilesDir(), wallpaperPath);
                 BitmapFactory.Options bounds = new BitmapFactory.Options();
@@ -82,6 +89,10 @@ final class ShapePreview implements AutoCloseable {
     }
 
     Bitmap render(IconShape shape) {
+        return render(shape, overlayScale);
+    }
+
+    Bitmap render(IconShape shape, int overlayScale) {
         Bitmap result = Bitmap.createBitmap(WIDTH, HEIGHT, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(result);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
@@ -102,16 +113,19 @@ final class ShapePreview implements AutoCloseable {
         text.setTextSize(25);
         text.setTextAlign(Paint.Align.CENTER);
         text.setShadowLayer(4, 0, 2, Color.BLACK);
-        for (int i = 0; i < originals.size(); i++) {
-            Bitmap icon = shape.preview((shape == IconShape.NONE ? originals : unmasked).get(i), visibleSize);
-            try {
-                IconOverlay.draw(icon, overlay);
-                int cx = 120 + i % 3 * 240, top = 40 + i / 3 * 208;
-                canvas.drawBitmap(icon, null, new Rect(cx - 60, top, cx + 60, top + 120), paint);
-                String label = TextUtils.ellipsize(labels.get(i), text, 210, TextUtils.TruncateAt.END).toString();
-                canvas.drawText(label, cx, top + 158, text);
-            } finally { icon.recycle(); }
-        }
+        Bitmap layer = overlay == null ? null : IconOverlay.scaled(overlay, overlayScale);
+        try {
+            for (int i = 0; i < originals.size(); i++) {
+                Bitmap icon = shape.preview((shape == IconShape.NONE ? originals : unmasked).get(i), visibleSize);
+                try {
+                    IconOverlay.draw(icon, layer);
+                    int cx = 120 + i % 3 * 240, top = 40 + i / 3 * 208;
+                    canvas.drawBitmap(icon, null, new Rect(cx - 60, top, cx + 60, top + 120), paint);
+                    String label = TextUtils.ellipsize(labels.get(i), text, 210, TextUtils.TruncateAt.END).toString();
+                    canvas.drawText(label, cx, top + 158, text);
+                } finally { icon.recycle(); }
+            }
+        } finally { if (layer != null) layer.recycle(); }
         return result;
     }
 

@@ -18,6 +18,9 @@
     <string name="remove_overlay">Remove overlay</string>
     <string name="use_overlay">Use overlay</string>
     <string name="overlay_preview">Overlay preview on an icon</string>
+    <string name="overlay_scale">Overlay scale: %1$d%%</string>
+    <string name="overlay_scale_help" formatted="false">50–150%, centred on the 192 × 192 canvas. Increase the scale for PNGs with transparent margins. Artwork outside the canvas is clipped. Tap Apply to save; the original image is unchanged.</string>
+    <string name="overlay_scale_invalid" formatted="false">Overlay scale must be between 50% and 150%.</string>
     <string name="overlay_fallback">Only system icons without a replacement</string>
     <string name="overlay_all">All icons, including packs and files</string>
     <string name="overlay_help">A square PNG with a transparent background and centre: a frame, highlights or decoration. Preferably 192 × 192 px; other sizes are resized to 192 × 192 without cropping. This is the icon_border.png top layer, not a clipping mask. Transparent areas reveal the icon; opaque areas cover it. HONOR applies it to icons without replacements. In All mode, Icon Foundry also draws it onto pack and file icons during export. A copy is saved in the template.</string>

@@ -259,6 +259,11 @@ final class IconRepository {
     }
 
     List<PackInfo> packs() throws PackageManager.NameNotFoundException {
+        Set<String> launchers = new LinkedHashSet<>();
+        for (ResolveInfo info : pm.queryIntentActivities(
+                new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0)) {
+            launchers.add(info.activityInfo.packageName);
+        }
         Set<String> candidates = new LinkedHashSet<>();
         List<Intent> intents = List.of(
                 new Intent("org.adw.launcher.THEMES"),
@@ -273,20 +278,28 @@ final class IconRepository {
         }
         List<PackInfo> result = new ArrayList<>();
         for (String packageName : candidates) {
+            if (launchers.contains(packageName)) continue;
             Resources resources = pm.getResourcesForApplication(packageName);
-            boolean hasFilter = resources.getIdentifier("appfilter", "xml", packageName) != 0;
-            if (!hasFilter) {
-                try {
-                    for (String asset : resources.getAssets().list("")) {
-                        if ("appfilter.xml".equals(asset)) hasFilter = true;
-                    }
-                } catch (IOException e) {
-                    throw new IllegalStateException(dev.iconmanager.App.text(R.string.pack_resources_error) + packageName, e);
-                }
-            }
-            if (hasFilter) {
+            try {
+                if (!hasXml(resources, packageName, "appfilter")) continue;
+                boolean[] mapped = {false};
+                parse(resources, packageName, "appfilter", parser -> {
+                    if (mapped[0]) return;
+                    String tag = parser.getName();
+                    if ((!tag.equals("item") && !tag.equals("calendar"))
+                            || component(parser.getAttributeValue(null, "component")) == null) return;
+                    String name = tag.equals("calendar")
+                            ? parser.getAttributeValue(null, "prefix") : parser.getAttributeValue(null, "drawable");
+                    if (name == null) return;
+                    if (tag.equals("calendar")) name += Calendar.getInstance().get(Calendar.DAY_OF_MONTH);
+                    mapped[0] = safeName(name) && (resources.getIdentifier(name, "drawable", packageName) != 0
+                            || resources.getIdentifier(name, "mipmap", packageName) != 0);
+                }, () -> {}, () -> mapped[0]);
+                if (!mapped[0]) continue;
                 String label = pm.getApplicationLabel(pm.getApplicationInfo(packageName, 0)).toString();
                 result.add(new PackInfo(packageName, label, badge(packageName)));
+            } catch (IOException | XmlPullParserException | Resources.NotFoundException error) {
+                android.util.Log.w("IconManager", "Invalid icon pack filter in " + packageName, error);
             }
         }
         result.sort(Comparator.comparing(PackInfo::label, String.CASE_INSENSITIVE_ORDER));

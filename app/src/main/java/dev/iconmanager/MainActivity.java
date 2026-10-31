@@ -526,7 +526,7 @@ public final class MainActivity extends Activity {
         overlayButtons.addView(button(R.string.choose_overlay, view -> openFile(OVERLAY_FILE, "image/png")),
                 new LinearLayout.LayoutParams(0, -2, 1));
         removeOverlay = button(R.string.remove_overlay, view -> {
-            draft.overlay = ""; draft.overlayAll = false; saveDraft(); refresh();
+            draft.overlay = ""; draft.overlayAll = false; draft.overlayScale = 100; saveDraft(); refresh();
         });
         LinearLayout.LayoutParams removeOverlayParams = new LinearLayout.LayoutParams(0, -2, 1);
         removeOverlayParams.leftMargin = dp(6);
@@ -670,7 +670,9 @@ public final class MainActivity extends Activity {
                 .filter(app -> currentPack == null || currentPack.automatic(app) == null).toList();
         IconShape shape = draft.shape;
         String overlayReference = draft.overlay;
-        String key = String.join(",", draft.packs) + ":" + shape + ":" + overlayReference + ":" + draft.overlayAll;
+        int overlayScale = draft.overlayScale;
+        String key = String.join(",", draft.packs) + ":" + shape + ":" + overlayReference + ":" + draft.overlayAll
+                + ":" + overlayScale;
         if (key.equals(shapePreview.getTag())) return;
         ImageView target = shapePreview;
         target.setTag(key);
@@ -695,7 +697,7 @@ public final class MainActivity extends Activity {
                     preview = shape.preview(source, currentPack == null ? IconShape.SIZE - 2 * IconShape.INSET
                             : currentPack.fallbackSize());
                 } finally { source.recycle(); }
-                Bitmap overlay = IconOverlay.load(this, overlayReference);
+                Bitmap overlay = IconOverlay.load(this, overlayReference, overlayScale);
                 try { IconOverlay.draw(preview, overlay); }
                 finally { if (overlay != null) overlay.recycle(); }
                 runOnUiThread(() -> {
@@ -749,6 +751,7 @@ public final class MainActivity extends Activity {
         stage.addView(loading, new FrameLayout.LayoutParams(dp(40), dp(40), Gravity.CENTER));
         content.addView(stage, new LinearLayout.LayoutParams(-1, -2));
         String wallpaperPath = draft.wallpaperPath, overlayReference = draft.overlay;
+        int[] overlayScale = {draft.overlayScale};
         content.addView(text(getString(wallpaperPath.isEmpty()
                 ? R.string.shape_preview_gradient : R.string.shape_preview_wallpaper), 12, MUTED));
         content.addView(text(getString(R.string.shape_preview_help), 13, MUTED));
@@ -772,13 +775,19 @@ public final class MainActivity extends Activity {
                 choice.findViewWithTag("shape-check").setVisibility(active ? View.VISIBLE : View.GONE);
             }
             if (scene[0] == null) return;
-            Bitmap image = scene[0].render(selected[0]);
+            Bitmap image = scene[0].render(selected[0], overlayScale[0]);
             preview.setImageBitmap(image);
             preview.setContentDescription(getString(R.string.shape_example, getString(selected[0].label),
                     String.join(", ", examples.stream().map(IconRepository.App::label).toList())));
             if (displayed[0] != null) displayed[0].recycle();
             displayed[0] = image;
         };
+        if (!overlayReference.isEmpty()) {
+            content.addView(createOverlayScaleControl(overlayScale[0], value -> {
+                overlayScale[0] = value;
+                render.run();
+            }));
+        }
         List<IconShape> shapes = List.of(IconShape.ROUNDED_SQUARE, IconShape.SQUIRCLE, IconShape.SQUARE, IconShape.CIRCLE,
                 IconShape.HEART, IconShape.STAR, IconShape.HEXAGON, IconShape.PENTAGON, IconShape.TEARDROP, IconShape.NONE);
         LinearLayout options = card(content, R.string.fallback_shape);
@@ -824,8 +833,9 @@ public final class MainActivity extends Activity {
         }
         while (line.getChildCount() < 4) line.addView(new View(this), new LinearLayout.LayoutParams(0, 0, 1));
         Button apply = button(R.string.apply_settings, view -> {
-            if (draft.shape != selected[0]) {
+            if (draft.shape != selected[0] || draft.overlayScale != overlayScale[0]) {
                 draft.shape = selected[0];
+                draft.overlayScale = overlayScale[0];
                 saveDraft();
                 refresh();
             }
@@ -915,16 +925,45 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private LinearLayout createOverlayScaleControl(int initial, java.util.function.IntConsumer changed) {
+        LinearLayout control = column();
+        TextView label = text(getString(R.string.overlay_scale, initial), 14, INK);
+        control.addView(label);
+        SeekBar slider = new SeekBar(this);
+        slider.setTag("overlay-scale");
+        slider.setMin(IconOverlay.MIN_SCALE);
+        slider.setMax(IconOverlay.MAX_SCALE);
+        slider.setKeyProgressIncrement(1);
+        slider.setProgress(initial);
+        slider.setContentDescription(getString(R.string.overlay_scale, initial));
+        slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar bar, int value, boolean fromUser) {
+                label.setText(getString(R.string.overlay_scale, value));
+                bar.setContentDescription(label.getText());
+                if (fromUser) changed.accept(value);
+            }
+            @Override public void onStartTrackingTouch(SeekBar bar) {}
+            @Override public void onStopTrackingTouch(SeekBar bar) {}
+        });
+        control.addView(slider, new LinearLayout.LayoutParams(-1, dp(48)));
+        control.addView(text(getString(R.string.overlay_scale_help), 13, MUTED));
+        return control;
+    }
+
     private void previewOverlay(Bitmap overlay) {
         Dialog dialog = fullDialog();
         LinearLayout content = scrollingDialogLayout(dialog, getString(R.string.overlay_title));
         content.addView(text(getString(R.string.overlay_help), 14, MUTED));
         Bitmap source = IconShape.previewSource(getDrawable(R.drawable.app_icon));
-        Bitmap preview = draft.shape.preview(source);
+        Bitmap base = draft.shape.preview(source);
         source.recycle();
-        IconOverlay.draw(preview, overlay);
+        int[] scale = {draft.overlayScale};
+        Bitmap[] preview = {base.copy(Bitmap.Config.ARGB_8888, true)};
+        Bitmap initialOverlay = IconOverlay.scaled(overlay, scale[0]);
+        try { IconOverlay.draw(preview[0], initialOverlay); }
+        finally { initialOverlay.recycle(); }
         ImageView image = new ImageView(this);
-        image.setImageBitmap(preview);
+        image.setImageBitmap(preview[0]);
         image.setScaleType(ImageView.ScaleType.FIT_CENTER);
         image.setContentDescription(getString(R.string.overlay_preview));
         content.addView(image, new LinearLayout.LayoutParams(-1, dp(192)));
@@ -934,11 +973,12 @@ public final class MainActivity extends Activity {
             work(() -> {
                 try { return FileIcons.save(this, copy); }
                 finally { copy.recycle(); }
-            }, reference -> { draft.overlay = reference; saveDraft(); refresh(); });
+            }, reference -> { draft.overlay = reference; draft.overlayScale = scale[0]; saveDraft(); refresh(); });
         }));
         overlayDialog = dialog;
         dialog.setOnDismissListener(ignored -> {
-            preview.recycle(); overlay.recycle();
+            image.setImageDrawable(null);
+            preview[0].recycle(); base.recycle(); overlay.recycle();
             if (overlayDialog == dialog) overlayDialog = null;
         });
         showFull(dialog);
@@ -1514,12 +1554,13 @@ public final class MainActivity extends Activity {
         preview.setContentDescription(getString(R.string.file_icon_preview));
         if (draft.overlayAll && !draft.overlay.isEmpty()) {
             String overlayReference = draft.overlay;
-            String key = "file-preview:" + appKey + ":" + overlayReference;
+            int overlayScale = draft.overlayScale;
+            String key = "file-preview:" + appKey + ":" + overlayReference + ":" + overlayScale;
             preview.setTag(key);
             Bitmap rendering = image.copy(Bitmap.Config.ARGB_8888, true);
             thumbnails.execute(() -> {
                 try {
-                    Bitmap bitmap = withPreviewOverlay(rendering, overlayReference);
+                    Bitmap bitmap = withPreviewOverlay(rendering, overlayReference, overlayScale);
                     runOnUiThread(() -> {
                         if (!isDestroyed() && dialog.isShowing()) preview.setImageBitmap(bitmap);
                         else bitmap.recycle();
@@ -1564,10 +1605,11 @@ public final class MainActivity extends Activity {
 
     private void bindSystemImage(ImageView view, IconRepository.App app) {
         String overlayReference = draft.overlay;
+        int overlayScale = draft.overlayScale;
         IconShape shape = draft.shape;
         IconRepository.Pack currentPack = pack;
         String key = "system:" + app.key() + ":shape:" + shape + ":" + String.join(",", draft.packs)
-                + ":overlay:" + overlayReference;
+                + ":overlay:" + overlayReference + ":" + overlayScale;
         view.setTag(key);
         view.setImageResource(R.drawable.app_icon);
         Bitmap cached = images.get(key);
@@ -1576,7 +1618,7 @@ public final class MainActivity extends Activity {
             try {
                 var icon = IconRepository.unthemedIcon(getPackageManager(), app.component());
                 int visibleSize = currentPack == null ? IconShape.SIZE - 2 * IconShape.INSET : currentPack.fallbackSize();
-                Bitmap bitmap = withPreviewOverlay(shape.preview(icon, visibleSize), overlayReference);
+                Bitmap bitmap = withPreviewOverlay(shape.preview(icon, visibleSize), overlayReference, overlayScale);
                 images.put(key, bitmap);
                 runOnUiThread(() -> { if (!isDestroyed() && key.equals(view.getTag())) view.setImageBitmap(bitmap); });
             } catch (android.content.pm.PackageManager.NameNotFoundException ignored) {
@@ -1593,9 +1635,10 @@ public final class MainActivity extends Activity {
 
     private void bindImage(ImageView view, IconRepository.Pack current, String name) {
         String overlayReference = draft.overlayAll ? draft.overlay : "";
+        int overlayScale = draft.overlayScale;
         String key = (name == null ? "" : IconRepository.reference(
                 IconRepository.sourcePackage(name, current.packageName), IconRepository.resourceName(name)))
-                + ":overlay:" + overlayReference;
+                + ":overlay:" + overlayReference + ":" + overlayScale;
         view.setTag(key);
         view.setImageResource(R.drawable.app_icon);
         if (name == null) return;
@@ -1603,7 +1646,7 @@ public final class MainActivity extends Activity {
         if (cached != null) { view.setImageBitmap(cached); return; }
         thumbnails.execute(() -> {
             try {
-                Bitmap bitmap = withPreviewOverlay(current.render(name, 128), overlayReference);
+                Bitmap bitmap = withPreviewOverlay(current.render(name, 128), overlayReference, overlayScale);
                 images.put(key, bitmap);
                 runOnUiThread(() -> { if (!isDestroyed() && key.equals(view.getTag())) view.setImageBitmap(bitmap); });
             } catch (IOException | RuntimeException error) {
@@ -1612,9 +1655,9 @@ public final class MainActivity extends Activity {
         });
     }
 
-    private Bitmap withPreviewOverlay(Bitmap image, String reference) throws IOException {
+    private Bitmap withPreviewOverlay(Bitmap image, String reference, int scale) throws IOException {
         try {
-            Bitmap overlay = IconOverlay.load(this, reference);
+            Bitmap overlay = IconOverlay.load(this, reference, scale);
             try { IconOverlay.draw(image, overlay); }
             finally { if (overlay != null) overlay.recycle(); }
             return image;
@@ -1661,7 +1704,7 @@ public final class MainActivity extends Activity {
             String outputName = ThemeEngine.availableDatedFilename(getContentResolver(), tree, outputTitle, createdAt);
             apps = repository.apps();
             Bitmap cover = null;
-            Bitmap overlay = IconOverlay.load(this, snapshot.overlay);
+            Bitmap overlay = IconOverlay.load(this, snapshot.overlay, snapshot.overlayScale);
             try {
                 if (coverPath.isEmpty()) cover = ThemeEngine.cover(currentPack, apps, overrides, snapshot.overlayAll ? overlay : null);
                 else {

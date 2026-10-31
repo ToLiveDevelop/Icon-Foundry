@@ -22,6 +22,7 @@ final class Draft {
     boolean systemIcons;
     String overlay = "";
     boolean overlayAll;
+    int overlayScale = 100;
     IconShape shape = IconShape.ROUNDED_SQUARE;
     final Map<String, String> overrides = new LinkedHashMap<>();
 
@@ -48,6 +49,10 @@ final class Draft {
         d.overlay = j.optString("overlay");
         if (!d.overlay.isEmpty() && !FileIcons.isFile(d.overlay)) throw new JSONException(App.text(R.string.overlay_invalid));
         d.overlayAll = j.optBoolean("overlayAll");
+        d.overlayScale = j.optInt("overlayScale", 100);
+        if (d.overlayScale < IconOverlay.MIN_SCALE || d.overlayScale > IconOverlay.MAX_SCALE) {
+            throw new JSONException(App.text(R.string.overlay_scale_invalid));
+        }
         try {
             d.shape = IconShape.valueOf(j.optString("shape", IconShape.NONE.name()));
         } catch (IllegalArgumentException error) {
@@ -119,6 +124,7 @@ final class Draft {
         if (packs.size() > 1) j.put("packs", new JSONArray(packs));
         if (systemIcons) j.put("systemIcons", true);
         if (!overlay.isEmpty()) j.put("overlay", overlay).put("overlayAll", overlayAll);
+        if (!overlay.isEmpty() && overlayScale != 100) j.put("overlayScale", overlayScale);
         return j;
     }
 

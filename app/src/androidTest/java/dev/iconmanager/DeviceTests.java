@@ -26,6 +26,16 @@ public final class DeviceTests extends Instrumentation {
     private Bundle arguments;
     private int checks;
 
+    @Override public void runOnMainSync(Runnable runner) {
+        java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
+        super.runOnMainSync(() -> {
+            try { runner.run(); }
+            catch (RuntimeException | AssertionError error) { failure.set(error); }
+        });
+        if (failure.get() instanceof RuntimeException error) throw error;
+        if (failure.get() instanceof AssertionError error) throw error;
+    }
+
     @Override public void onCreate(Bundle arguments) {
         this.arguments = arguments;
         start();
@@ -82,6 +92,14 @@ public final class DeviceTests extends Instrumentation {
         String packName = arguments.getString("pack", "com.maxpatchs.premium");
         List<IconRepository.PackInfo> packs = repository.packs();
         check(packs.stream().anyMatch(p -> p.packageName().equals(packName)), "Pack visibility/discovery");
+        List<android.content.pm.ResolveInfo> launchers = context.getPackageManager().queryIntentActivities(
+                new android.content.Intent(android.content.Intent.ACTION_MAIN)
+                        .addCategory(android.content.Intent.CATEGORY_HOME), 0);
+        check(launchers.stream().noneMatch(launcher -> packs.stream().anyMatch(info ->
+                        info.packageName().equals(launcher.activityInfo.packageName))),
+                "Home launchers with internal appfilter resources are excluded from icon pack selection");
+        check(packs.stream().noneMatch(info -> info.packageName().equals("com.or.launcher.oreo")),
+                "Installed P Launcher is not offered as an icon pack");
         for (IconRepository.PackInfo info : packs) {
             check(info.badge() != null && info.badge().getWidth() == 96
                     && info.badge().getHeight() == 96, "Discovered pack has an application icon for picker");
@@ -598,6 +616,8 @@ public final class DeviceTests extends Instrumentation {
         Draft isolated = Draft.fromJson(original.toJson());
         isolated.wallpaperPath = "";
         isolated.shape = IconShape.ROUNDED_SQUARE;
+        isolated.overlay = "";
+        isolated.overlayScale = 100;
         String savedJson = activity.getSharedPreferences("draft", 0).getString("json", "");
         var build = MainActivity.class.getDeclaredMethod("buildScreen");
         build.setAccessible(true);
@@ -613,6 +633,8 @@ public final class DeviceTests extends Instrumentation {
             runOnMainChecked(() -> {
                 android.app.Dialog dialog = (android.app.Dialog) field(activity, "shapeDialog");
                 android.view.View decor = dialog.getWindow().getDecorView();
+                check(decor.findViewWithTag("overlay-scale") == null,
+                        "Shape popup has no scale slider when no overlay is selected");
                 android.widget.ImageView scene = decor.findViewWithTag("shape-scene");
                 check(scene.getDrawable() instanceof android.graphics.drawable.BitmapDrawable,
                         "Shape popup loads its six-icon wallpaper scene before enabling Apply");
@@ -639,6 +661,12 @@ public final class DeviceTests extends Instrumentation {
                             "Choosing preview shapes does not modify the draft before Apply");
                     dialog.dismiss();
                 } finally { initial.recycle(); }
+                Bitmap overlay = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+                android.graphics.Paint paint = new android.graphics.Paint();
+                paint.setColor(0xB0FFFFFF);
+                new android.graphics.Canvas(overlay).drawRect(24, 24, 168, 168, paint);
+                try { isolated.overlay = FileIcons.save(activity, overlay); }
+                finally { overlay.recycle(); }
                 ((android.view.View) field(activity, "shapeButton")).performClick();
             });
             waitForThumbnails(activity);
@@ -647,6 +675,32 @@ public final class DeviceTests extends Instrumentation {
                 android.view.View decor = dialog.getWindow().getDecorView();
                 check(decor.findViewWithTag(IconShape.ROUNDED_SQUARE).isSelected(),
                         "Cancelling the popup restores the original selection");
+                android.widget.SeekBar scale = decor.findViewWithTag("overlay-scale");
+                check(scale != null && scale.getProgress() == 100,
+                        "Selected overlay exposes its saved scale in the shape popup");
+                android.widget.ImageView scene = decor.findViewWithTag("shape-scene");
+                Bitmap before = ((android.graphics.drawable.BitmapDrawable) scene.getDrawable()).getBitmap()
+                        .copy(Bitmap.Config.ARGB_8888, false);
+                scale.setProgress(119);
+                scale.onKeyDown(android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                        new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_RIGHT));
+                try { check(!before.sameAs(((android.graphics.drawable.BitmapDrawable) scene.getDrawable()).getBitmap())
+                                && isolated.overlayScale == 100,
+                        "Dragging overlay scale updates scene without changing draft before Apply"); }
+                finally { before.recycle(); }
+                dialog.dismiss();
+                check(isolated.overlayScale == 100, "Cancelling shape popup discards preview overlay scale");
+                ((android.view.View) field(activity, "shapeButton")).performClick();
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "shapeDialog");
+                android.view.View decor = dialog.getWindow().getDecorView();
+                android.widget.SeekBar scale = decor.findViewWithTag("overlay-scale");
+                check(scale.getProgress() == 100, "Reopened cancelled scale uses original value");
+                scale.setProgress(119);
+                scale.onKeyDown(android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                        new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_RIGHT));
                 decor.findViewWithTag(IconShape.HEART).performClick();
                 android.view.View apply = findText(decor, activity.getString(R.string.apply_settings));
                 check(apply.isEnabled() && ((android.view.ViewGroup) apply.getParent()).getChildAt(1)
@@ -655,6 +709,8 @@ public final class DeviceTests extends Instrumentation {
                 apply.performClick();
                 check(isolated.shape == IconShape.HEART && Draft.load(activity).shape == IconShape.HEART
                                 && !dialog.isShowing(), "Apply saves the chosen mask and closes the popup");
+                check(isolated.overlayScale == 120 && Draft.load(activity).overlayScale == 120,
+                        "Apply persists overlay scale together with shape");
                 ((android.view.View) field(activity, "shapeButton")).performClick();
             });
             waitForThumbnails(activity);
@@ -662,6 +718,8 @@ public final class DeviceTests extends Instrumentation {
                 android.app.Dialog dialog = (android.app.Dialog) field(activity, "shapeDialog");
                 check(dialog.getWindow().getDecorView().findViewWithTag(IconShape.HEART).isSelected(),
                         "Reopened popup selects the applied shape");
+                check(((android.widget.SeekBar) dialog.getWindow().getDecorView().findViewWithTag("overlay-scale"))
+                                .getProgress() == 120, "Reopened popup restores applied overlay scale");
                 dialog.dismiss();
             });
         } finally {
@@ -798,6 +856,7 @@ public final class DeviceTests extends Instrumentation {
         String icon = source.icons.keySet().iterator().next();
         String previousOverlay = draft.overlay;
         boolean previousAll = draft.overlayAll;
+        int previousScale = draft.overlayScale;
         Map<String, String> previousOverrides = new LinkedHashMap<>(draft.overrides);
         Bitmap file = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
         file.eraseColor(android.graphics.Color.BLUE);
@@ -814,14 +873,16 @@ public final class DeviceTests extends Instrumentation {
                 android.widget.ImageView.class, IconRepository.App.class);
         bind.setAccessible(true); bindSystem.setAccessible(true);
         try {
-            for (String mode : List.of("fallback", "all", "removed", "changed", "fallback", "all")) {
-                boolean all = mode.equals("all") || mode.equals("changed");
+            for (String mode : List.of("fallback", "all", "scaled", "removed", "changed", "fallback", "all")) {
+                boolean all = mode.equals("all") || mode.equals("changed") || mode.equals("scaled");
+                int scale = mode.equals("scaled") ? 120 : 100;
                 String overlayReference = mode.equals("removed") ? ""
                         : mode.equals("changed") ? otherReference : previousOverlay;
                 android.widget.ImageView[] views = new android.widget.ImageView[4];
                 Bitmap[] placeholder = new Bitmap[1];
                 runOnMainChecked(() -> {
                     draft.overlayAll = all; draft.overlay = overlayReference;
+                    draft.overlayScale = scale;
                     for (int i = 0; i < views.length; i++) views[i] = new android.widget.ImageView(activity);
                     bind.invoke(activity, views[0], source, icon);
                     bind.invoke(activity, views[1], pack, fileReference);
@@ -830,7 +891,7 @@ public final class DeviceTests extends Instrumentation {
                     placeholder[0] = IconShape.previewSource(views[3].getDrawable(), false);
                 });
                 waitForThumbnails(activity);
-                Bitmap overlay = IconOverlay.load(activity, overlayReference);
+                Bitmap overlay = IconOverlay.load(activity, overlayReference, scale);
                 IconRepository.Pack activePack = (IconRepository.Pack) field(activity, "pack");
                 Bitmap[] expected = {source.render(icon, 128), pack.render(fileReference, 128),
                         draft.shape.preview(IconRepository.unthemedIcon(activity.getPackageManager(), app.component()),
@@ -916,6 +977,7 @@ public final class DeviceTests extends Instrumentation {
                     if (dialog != null) dialog.dismiss();
                 }
                 draft.overlay = previousOverlay; draft.overlayAll = previousAll;
+                draft.overlayScale = previousScale;
                 draft.overrides.clear(); draft.overrides.putAll(previousOverrides);
             });
             file.recycle();
@@ -1027,6 +1089,15 @@ public final class DeviceTests extends Instrumentation {
             draft.packs.add(pack.packageName); draft.overlay = reference; draft.overlayAll = true;
             Draft roundTrip = Draft.fromJson(draft.toJson());
             check(roundTrip.overlay.equals(reference) && roundTrip.overlayAll, "Overlay and target scope round-trip");
+            check(roundTrip.overlayScale == 100 && !draft.toJson().has("overlayScale"),
+                    "Legacy overlay templates keep 100 percent scale and unchanged fingerprints");
+            draft.overlayScale = 120;
+            check(Draft.fromJson(draft.toJson()).overlayScale == 120, "Overlay scale round-trips in draft");
+            for (int invalid : new int[]{49, 151}) {
+                expectFailure(() -> Draft.fromJson(draft.toJson().put("overlayScale", invalid)),
+                        "Saved overlay scale outside supported range is rejected");
+                expectFailure(() -> IconOverlay.scaled(overlay, invalid), "Rendering rejects invalid overlay scale");
+            }
             check(!new Draft().toJson().has("overlay"), "No-overlay drafts preserve legacy fingerprints");
             TemplateStore store = new TemplateStore(isolated);
             TemplateStore.Entry saved = store.save(draft, pack.label, false);
@@ -1034,9 +1105,62 @@ public final class DeviceTests extends Instrumentation {
             File cached = FileIcons.directory(isolated).listFiles()[0];
             Files.delete(cached.toPath());
             Draft restored = store.open(saved.id());
+            check(restored.overlayScale == 120, "Template restores overlay scale together with original PNG");
             Bitmap restoredImage = IconOverlay.load(isolated, restored.overlay);
             try { check(restoredImage.sameAs(overlay), "Template restores overlay after original file is removed"); }
             finally { restoredImage.recycle(); }
+            Bitmap padded = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+            android.graphics.Paint paddedPaint = new android.graphics.Paint();
+            paddedPaint.setColor(0xB0FFFFFF);
+            new android.graphics.Canvas(padded).drawRect(24, 24, 168, 168, paddedPaint);
+            String paddedReference = FileIcons.save(isolated, padded);
+            Bitmap scaled = IconOverlay.load(isolated, paddedReference, 120);
+            Bitmap reduced = IconOverlay.load(isolated, paddedReference, 50);
+            try {
+                var bounds = IconRepository.Pack.visibleBounds(scaled);
+                check(scaled.getWidth() == 192 && scaled.getHeight() == 192
+                                && Math.abs(bounds.width() - 173) <= 1
+                                && Math.abs(bounds.height() - 173) <= 1
+                                && bounds.centerX() == 96 && bounds.centerY() == 96,
+                        "120 percent enlarges padded artwork by 20 percent on the same centred 192px canvas");
+                check(IconRepository.Pack.visibleBounds(reduced).width() == 72,
+                        "50 percent overlay preserves centred transparent margins");
+                Bitmap sourceAgain = IconOverlay.load(isolated, paddedReference);
+                try { check(sourceAgain.sameAs(padded), "Scaling never modifies the stored original overlay"); }
+                finally { sourceAgain.recycle(); }
+                IconRepository.App scaledApp = new IconRepository.App(
+                        new ComponentName("dev.test.scaled", "dev.test.scaled.Main"), "Scaled");
+                Map<String, String> scaledOverrides = Map.of(scaledApp.key(), pack.icons.keySet().iterator().next());
+                ThemeEngine.Built scaledTheme = ThemeEngine.build(isolated, "Scaled overlay", false,
+                        IconShape.SQUARE, false, pack, List.of(scaledApp), scaledOverrides,
+                        cover, null, scaled, true, (done, total) -> {});
+                try (ZipFile archive = new ZipFile(scaledTheme.file());
+                     ZipInputStream icons = new ZipInputStream(archive.getInputStream(archive.getEntry("icons")))) {
+                    boolean borderFound = false, appFound = false;
+                    for (ZipEntry entry; (entry = icons.getNextEntry()) != null;) {
+                        if (!entry.getName().equals("icon_border.png") && !entry.getName().equals("dev.test.scaled.png")) continue;
+                        byte[] bytes = icons.readAllBytes();
+                        Bitmap actual = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                        Bitmap expected = entry.getName().equals("icon_border.png") ? scaled.copy(Bitmap.Config.ARGB_8888, true)
+                                : pack.render(scaledOverrides.get(scaledApp.key()), 192);
+                        try {
+                            if (!entry.getName().equals("icon_border.png")) IconOverlay.draw(expected, scaled);
+                            check(actual.sameAs(expected), "Export uses scaled artwork for border and baked icons");
+                        } finally { actual.recycle(); expected.recycle(); }
+                        borderFound |= entry.getName().equals("icon_border.png");
+                        appFound |= entry.getName().equals("dev.test.scaled.png");
+                    }
+                    check(borderFound && appFound, "Scaled overlay archive contains native border and application icon");
+                } finally { Files.deleteIfExists(scaledTheme.file().toPath()); }
+                List<IconRepository.App> examples = ShapePreview.examples(new IconRepository(context).apps(),
+                        pack, Map.of(), java.util.Locale.ENGLISH);
+                try (ShapePreview normalScene = ShapePreview.load(isolated, examples, pack.fallbackSize(), "", paddedReference);
+                     ShapePreview scaledScene = ShapePreview.load(isolated, examples, pack.fallbackSize(), "", paddedReference, 120)) {
+                    Bitmap normal = normalScene.render(IconShape.SQUARE), enlarged = scaledScene.render(IconShape.SQUARE);
+                    try { check(!normal.sameAs(enlarged), "Shape popup uses the configured overlay scale"); }
+                    finally { normal.recycle(); enlarged.recycle(); }
+                }
+            } finally { padded.recycle(); scaled.recycle(); reduced.recycle(); }
             IconRepository.App app = new IconRepository.App(new ComponentName("dev.test.overlay", "dev.test.overlay.Main"), "Overlay");
             String chosen = pack.icons.keySet().iterator().next();
             String fileIcon = FileIcons.save(isolated, opaque);
@@ -1381,14 +1505,14 @@ public final class DeviceTests extends Instrumentation {
         try {
             runOnMainSync(() -> activity.getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON));
             waitForWork(activity);
-            runOnMainSync(() -> {
+            runOnMainChecked(() -> {
                 check(findText(activity.getWindow().getDecorView(), context.getString(R.string.templates)) != null,
                         "Application starts with template list");
                 check(field(activity, "pack") == null, "Start screen does not load an icon pack");
                 ((MainActivity) activity).openEditor();
             });
             waitForWork(activity);
-            runOnMainSync(() -> {
+            runOnMainChecked(() -> {
                 android.util.TypedValue accent = new android.util.TypedValue();
                 activity.getTheme().resolveAttribute(android.R.attr.colorAccent, accent, true);
                 check(accent.data == android.graphics.Color.rgb(255, 193, 7), "App theme uses amber accent");
@@ -1451,7 +1575,7 @@ public final class DeviceTests extends Instrumentation {
                         "Draft footer does not change while pack discovery is loading");
             });
             waitForWork(activity);
-            runOnMainSync(() -> {
+            runOnMainChecked(() -> {
                 android.app.Dialog dialog = (android.app.Dialog) field(activity, "packDialog");
                 android.widget.ListView list = findList(dialog.getWindow().getDecorView());
                 check(list != null && list.getAdapter().getCount() > 0, "Skeleton replaced with discovered pack list");
@@ -1466,11 +1590,13 @@ public final class DeviceTests extends Instrumentation {
                 check(!(boolean) field(activity, "busy"), "Pack discovery finishes before picker is used");
             });
             verifyOperationUi((MainActivity) activity);
-            verifyMultiPackUi((MainActivity) activity, pack);
-            verifyThemeEditing((MainActivity) activity, pack);
+            IconRepository.Pack editorPack = (IconRepository.Pack) field(activity, "pack");
+            IconRepository.Pack primaryPack = editorPack.members.isEmpty() ? editorPack : editorPack.members.get(0);
+            verifyMultiPackUi((MainActivity) activity, primaryPack);
+            verifyThemeEditing((MainActivity) activity, primaryPack);
             verifyWallpaperUi((MainActivity) activity);
-            verifyFileIconUi((MainActivity) activity, pack);
-            verifyIconSourcePicker((MainActivity) activity, pack);
+            verifyFileIconUi((MainActivity) activity, primaryPack);
+            verifyIconSourcePicker((MainActivity) activity, primaryPack);
             verifyCropUi((MainActivity) activity);
             verifyTemplateExportUi((MainActivity) activity);
         } finally { runOnMainSync(activity::finish); }
@@ -1480,12 +1606,17 @@ public final class DeviceTests extends Instrumentation {
         Draft original = (Draft) field(activity, "draft");
         TemplateStore originalStore = (TemplateStore) field(activity, "templates");
         Draft settings = Draft.fromJson(original.toJson());
+        String templateTitle = "Template integration " + Long.toUnsignedString(System.nanoTime());
+        String copyTitle = templateTitle + " copy";
         settings.templateId = "";
-        settings.title = "Template integration";
+        settings.title = templateTitle;
         settings.coverPath = "";
         settings.wallpaperPath = "";
         settings.fullPack = false;
         settings.overrides.clear();
+        settings.overlay = "";
+        settings.overlayAll = false;
+        settings.overlayScale = 100;
         File directory = new File(activity.getCacheDir(), "template-export-check");
         Files.createDirectories(directory.toPath());
         Context isolated = new android.content.ContextWrapper(activity) {
@@ -1504,7 +1635,7 @@ public final class DeviceTests extends Instrumentation {
             String firstId = "";
             for (int step = 0; step < 3; step++) {
                 int current = step;
-                String themeTitle = current == 2 ? "Template copy" : "Template integration";
+                String themeTitle = current == 2 ? copyTitle : templateTitle;
                 String expectedTitle = current == 1 ? themeTitle + " v2" : themeTitle;
                 runOnMainSync(() -> {
                     ((android.widget.EditText) field(activity, "title")).setText(themeTitle);
@@ -1591,7 +1722,7 @@ public final class DeviceTests extends Instrumentation {
             runOnMainSync(() -> {
                 check(((Draft) field(activity, "draft")).templateId.equals(originalId),
                         "Selecting a template opens that template for subsequent overwrite");
-                check(((android.widget.EditText) field(activity, "title")).getText().toString().equals("Template integration"),
+                check(((android.widget.EditText) field(activity, "title")).getText().toString().equals(templateTitle),
                         "Opening older template restores its independent settings");
             });
             byte[] before = Files.readAllBytes(new File(directory, "templates.json").toPath());
@@ -1727,7 +1858,7 @@ public final class DeviceTests extends Instrumentation {
     }
 
     private int progressCount(android.view.View view) {
-        int count = view instanceof android.widget.ProgressBar ? 1 : 0;
+        int count = view instanceof android.widget.ProgressBar progress && progress.isIndeterminate() ? 1 : 0;
         if (view instanceof android.view.ViewGroup group) {
             for (int i = 0; i < group.getChildCount(); i++) count += progressCount(group.getChildAt(i));
         }

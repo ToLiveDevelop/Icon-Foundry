@@ -17,6 +17,9 @@
     <string name="remove_overlay">Убрать накладку</string>
     <string name="use_overlay">Использовать накладку</string>
     <string name="overlay_preview">Пример наложения на иконку</string>
+    <string name="overlay_scale">Масштаб накладки: %1$d%%</string>
+    <string name="overlay_scale_help" formatted="false">50–150%, по центру холста 192 × 192. Увеличьте масштаб, если в PNG есть прозрачные поля. Рисунок за пределами холста обрезается. Для сохранения нажмите «Применить»; исходный файл не меняется.</string>
+    <string name="overlay_scale_invalid" formatted="false">Масштаб накладки должен быть от 50% до 150%.</string>
     <string name="overlay_fallback">Только системные иконки без замены</string>
     <string name="overlay_all">Все иконки, включая паки и файлы</string>
     <string name="overlay_help">Квадратный PNG с прозрачным фоном и центром: рамка, блики или декор. Желательно 192 × 192 px; другой размер масштабируется до 192 × 192 без обрезки. Это верхний слой icon_border.png, не маска обрезки. Прозрачные участки показывают иконку, непрозрачные закрывают её. Для иконок без замены слой накладывает HONOR, для паков и файлов в режиме «Все» — Icon Foundry при экспорте. Копия сохраняется в шаблоне.</string>
