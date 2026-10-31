@@ -108,6 +108,7 @@ public final class DeviceTests extends Instrumentation {
         verifyShapeExamples(context, pack);
         verifySettingsResources(context);
         verifyOverlay(context, pack);
+        verifyBackground(context, pack);
         if ("true".equals(arguments.getString("settingsOverlayOnly"))) {
             verifySettingsUi(context);
             return;
@@ -507,6 +508,7 @@ public final class DeviceTests extends Instrumentation {
                 if (mode.equals("dark")) {
                     verifyShapePickerUi(result);
                     verifyOverlayUi(result);
+                    verifyBackgroundUi(result);
                 }
             }
         } finally {
@@ -647,6 +649,7 @@ public final class DeviceTests extends Instrumentation {
         isolated.overlay = "";
         isolated.overlayScale = 100;
         isolated.overlayClip = true;
+        isolated.background = "";
         String savedJson = activity.getSharedPreferences("draft", 0).getString("json", "");
         var build = MainActivity.class.getDeclaredMethod("buildScreen");
         build.setAccessible(true);
@@ -827,6 +830,7 @@ public final class DeviceTests extends Instrumentation {
         Draft original = (Draft) field(activity, "draft");
         Draft isolated = Draft.fromJson(original.toJson());
         isolated.overlay = ""; isolated.overlayAll = false;
+        isolated.background = "";
         isolated.coverPath = ""; isolated.wallpaperPath = "";
         java.util.Set<String> beforeFiles = new java.util.HashSet<>();
         File directory = FileIcons.directory(activity);
@@ -845,11 +849,14 @@ public final class DeviceTests extends Instrumentation {
                     android.view.View coverCard = (android.view.View) coverPanel.getParent();
                     android.view.View wallpaperCard = (android.view.View) wallpaperPanel.getParent();
                     android.view.View overlayCard = (android.view.View) overlayPanel.getParent();
+                    android.view.View backgroundCard = (android.view.View)
+                            ((android.view.View) field(field(activity, "backgroundSection"), "content")).getParent();
                     check(form.indexOfChild(coverCard) + 1 == form.indexOfChild(wallpaperCard)
-                                    && form.indexOfChild(wallpaperCard) + 1 == form.indexOfChild(overlayCard),
-                            "Cover, wallpaper and overlay sections appear consecutively in that order");
+                                    && form.indexOfChild(wallpaperCard) + 1 == form.indexOfChild(backgroundCard)
+                                    && form.indexOfChild(backgroundCard) + 1 == form.indexOfChild(overlayCard),
+                            "Cover, wallpaper, background and overlay sections appear in layer order");
                     String unchanged = isolated.toJson().toString();
-                    for (String section : List.of("coverSection", "wallpaperSection", "overlaySection")) {
+                    for (String section : List.of("coverSection", "wallpaperSection", "backgroundSection", "overlaySection")) {
                         Object optional = field(activity, section);
                         android.view.View content = (android.view.View) field(optional, "content");
                         android.view.View toggle = (android.view.View) field(optional, "toggle");
@@ -934,6 +941,255 @@ public final class DeviceTests extends Instrumentation {
                 if (!beforeFiles.contains(file.getName())) Files.deleteIfExists(file.toPath());
             }
         }
+    }
+
+    private void verifyBackgroundUi(MainActivity activity) throws Exception {
+        Draft original = (Draft) field(activity, "draft");
+        Draft isolated = Draft.fromJson(original.toJson());
+        isolated.background = ""; isolated.backgroundScale = 100; isolated.backgroundClip = true; isolated.backgroundAll = false;
+        isolated.overlay = ""; isolated.wallpaperPath = ""; isolated.shape = IconShape.ROUNDED_SQUARE;
+        File directory = FileIcons.directory(activity);
+        java.util.Set<String> beforeFiles = new java.util.HashSet<>();
+        File[] existing = directory.listFiles();
+        if (existing != null) for (File file : existing) beforeFiles.add(file.getName());
+        var build = MainActivity.class.getDeclaredMethod("buildScreen");
+        build.setAccessible(true);
+        try {
+            runOnMainChecked(() -> {
+                setField(activity, "draft", isolated);
+                build.invoke(activity);
+                check(((android.view.View) field(field(activity, "backgroundSection"), "content")).getVisibility()
+                                == android.view.View.GONE, "Empty background card starts collapsed");
+                check(((android.view.View) field(activity, "backgroundScope")).getVisibility() == android.view.View.GONE,
+                        "Background scope is hidden before import");
+                Bitmap image = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+                image.eraseColor(android.graphics.Color.GREEN);
+                var preview = MainActivity.class.getDeclaredMethod("previewBackground", Bitmap.class);
+                preview.setAccessible(true); preview.invoke(activity, image);
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "backgroundDialog");
+                check(dialog.isShowing(), "Background import shows a confirmation preview");
+                findText(dialog.getWindow().getDecorView(), activity.getString(R.string.use_background)).performClick();
+            });
+            waitForWork(activity);
+            runOnMainChecked(() -> {
+                check(FileIcons.isFile(isolated.background) && !isolated.backgroundAll,
+                        "Confirmed background is saved with fallback-only scope");
+                check(((android.view.View) field(field(activity, "backgroundSection"), "content")).getVisibility()
+                                == android.view.View.VISIBLE, "Selecting a background expands its card");
+                ((android.view.View) field(activity, "shapeButton")).performClick();
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "shapeDialog");
+                android.view.View decor = dialog.getWindow().getDecorView();
+                android.widget.SeekBar scale = decor.findViewWithTag("background-scale");
+                android.widget.CheckBox clip = decor.findViewWithTag("background-clip");
+                check(scale != null && scale.getProgress() == 100 && clip.isChecked()
+                                && decor.findViewWithTag("overlay-scale") == null,
+                        "Shape picker shows only the selected background controls");
+                android.widget.ImageView scene = decor.findViewWithTag("shape-scene");
+                Bitmap before = ((android.graphics.drawable.BitmapDrawable) scene.getDrawable()).getBitmap()
+                        .copy(Bitmap.Config.ARGB_8888, false);
+                scale.setProgress(149);
+                scale.onKeyDown(android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                        new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_RIGHT));
+                clip.setChecked(false);
+                decor.findViewWithTag(IconShape.HEART).performClick();
+                try { check(!before.sameAs(((android.graphics.drawable.BitmapDrawable) scene.getDrawable()).getBitmap()),
+                        "Background scale and clipping update the six-icon wallpaper preview"); }
+                finally { before.recycle(); }
+                check(isolated.backgroundScale == 100 && isolated.backgroundClip,
+                        "Background preview changes do not modify the draft before Apply");
+                findText(decor, activity.getString(R.string.apply_settings)).performClick();
+                Draft saved = Draft.load(activity);
+                check(saved.backgroundScale == 150 && !saved.backgroundClip && saved.shape == IconShape.HEART,
+                        "Apply persists background scale, clipping and shape together");
+                ((android.view.View) field(activity, "shapeButton")).performClick();
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "shapeDialog");
+                android.view.View decor = dialog.getWindow().getDecorView();
+                android.widget.SeekBar scale = decor.findViewWithTag("background-scale");
+                check(scale.getProgress() == 150 && !((android.widget.CheckBox) decor.findViewWithTag("background-clip")).isChecked(),
+                        "Reopened picker restores background controls");
+                scale.setProgress(79);
+                scale.onKeyDown(android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                        new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_RIGHT));
+                ((android.widget.CheckBox) decor.findViewWithTag("background-clip")).setChecked(true);
+                dialog.dismiss();
+                check(isolated.backgroundScale == 150 && !isolated.backgroundClip,
+                        "Cancelling the shape picker discards background changes");
+                ((android.widget.RadioGroup) field(activity, "backgroundScope")).getChildAt(1).performClick();
+                check(isolated.backgroundAll && Draft.load(activity).backgroundAll, "All-icons background scope is saved");
+            });
+            verifyBackgroundPreviews(activity);
+            runOnMainChecked(() -> {
+                Bitmap overlay = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+                android.graphics.Paint paint = new android.graphics.Paint();
+                paint.setColor(android.graphics.Color.BLUE);
+                new android.graphics.Canvas(overlay).drawRect(0, 0, 192, 20, paint);
+                try { isolated.overlay = FileIcons.save(activity, overlay); }
+                finally { overlay.recycle(); }
+                isolated.overlayScale = 100; isolated.overlayClip = false;
+                build.invoke(activity);
+                ((android.view.View) field(activity, "shapeButton")).performClick();
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "shapeDialog");
+                android.view.View decor = dialog.getWindow().getDecorView();
+                android.widget.SeekBar background = decor.findViewWithTag("background-scale");
+                android.widget.SeekBar overlay = decor.findViewWithTag("overlay-scale");
+                check(background != null && overlay != null && decor.findViewWithTag("background-clip") != null
+                                && decor.findViewWithTag("overlay-clip") != null,
+                        "Background and overlay controls coexist in the shape picker");
+                android.widget.ImageView scene = decor.findViewWithTag("shape-scene");
+                Bitmap before = ((android.graphics.drawable.BitmapDrawable) scene.getDrawable()).getBitmap()
+                        .copy(Bitmap.Config.ARGB_8888, false);
+                background.setProgress(51);
+                background.onKeyDown(android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                        new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_LEFT));
+                try { check(!before.sameAs(((android.graphics.drawable.BitmapDrawable) scene.getDrawable()).getBitmap()),
+                        "Changing background scale updates the scene independently of overlay"); }
+                finally { before.recycle(); }
+                before = ((android.graphics.drawable.BitmapDrawable) scene.getDrawable()).getBitmap()
+                        .copy(Bitmap.Config.ARGB_8888, false);
+                overlay.setProgress(149);
+                overlay.onKeyDown(android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                        new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_RIGHT));
+                try { check(!before.sameAs(((android.graphics.drawable.BitmapDrawable) scene.getDrawable()).getBitmap()),
+                        "Changing overlay scale updates the scene independently of background"); }
+                finally { before.recycle(); }
+                dialog.dismiss();
+                check(isolated.backgroundScale == 150 && isolated.overlayScale == 100,
+                        "Cancelling discards both independent layer scales");
+                ((android.view.View) field(activity, "removeOverlay")).performClick();
+                build.invoke(activity);
+                check(((android.view.View) field(field(activity, "backgroundSection"), "content")).getVisibility()
+                                == android.view.View.VISIBLE, "Populated background card reopens expanded");
+                ((android.view.View) field(activity, "removeBackground")).performClick();
+                check(isolated.background.isEmpty() && !isolated.backgroundAll && isolated.backgroundClip
+                                && isolated.backgroundScale == 100 && !isolated.toJson().has("background"),
+                        "Removing a background clears its reference and resets related settings");
+                ((android.view.View) field(activity, "shapeButton")).performClick();
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "shapeDialog");
+                check(dialog.getWindow().getDecorView().findViewWithTag("background-scale") == null
+                                && dialog.getWindow().getDecorView().findViewWithTag("background-clip") == null,
+                        "Removing the background also hides its shape controls");
+                dialog.dismiss();
+            });
+        } finally {
+            runOnMainChecked(() -> {
+                for (String name : List.of("backgroundDialog", "shapeDialog", "iconDialog", "fileIconDialog")) {
+                    android.app.Dialog dialog = (android.app.Dialog) field(activity, name);
+                    if (dialog != null) dialog.dismiss();
+                }
+                setField(activity, "draft", original);
+                original.save(activity); build.invoke(activity);
+            });
+            File[] files = directory.listFiles();
+            if (files != null) for (File file : files) if (!beforeFiles.contains(file.getName())) Files.deleteIfExists(file.toPath());
+        }
+    }
+
+    private void verifyBackgroundPreviews(MainActivity activity) throws Exception {
+        Draft draft = (Draft) field(activity, "draft");
+        String reference = draft.background;
+        IconRepository.Pack pack = (IconRepository.Pack) field(activity, "pack");
+        IconRepository.Pack source = pack.members.isEmpty() ? pack : pack.members.get(0);
+        String iconName = source.icons.keySet().iterator().next();
+        @SuppressWarnings("unchecked")
+        IconRepository.App app = ((List<IconRepository.App>) field(activity, "apps")).get(0);
+        Bitmap file = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+        android.graphics.Paint paint = new android.graphics.Paint();
+        paint.setColor(android.graphics.Color.RED);
+        new android.graphics.Canvas(file).drawRect(64, 64, 128, 128, paint);
+        String fileReference = FileIcons.save(activity, file);
+        var bind = MainActivity.class.getDeclaredMethod("bindImage",
+                android.widget.ImageView.class, IconRepository.Pack.class, String.class);
+        var bindSystem = MainActivity.class.getDeclaredMethod("bindSystemImage",
+                android.widget.ImageView.class, IconRepository.App.class);
+        bind.setAccessible(true); bindSystem.setAccessible(true);
+        try {
+            for (String mode : List.of("fallback", "all", "scaled", "clipped", "removed", "all")) {
+                android.widget.ImageView[] views = new android.widget.ImageView[3];
+                runOnMainChecked(() -> {
+                    draft.background = mode.equals("removed") ? "" : reference;
+                    draft.backgroundAll = !mode.equals("fallback");
+                    draft.backgroundScale = mode.equals("scaled") ? 50 : 150;
+                    draft.backgroundClip = mode.equals("clipped");
+                    for (int i = 0; i < views.length; i++) views[i] = new android.widget.ImageView(activity);
+                    bind.invoke(activity, views[0], source, iconName);
+                    bind.invoke(activity, views[1], pack, fileReference);
+                    bindSystem.invoke(activity, views[2], app);
+                });
+                waitForThumbnails(activity);
+                Bitmap[] expected = {source.render(iconName, 128), pack.render(fileReference, 128),
+                        draft.shape.preview(IconRepository.unthemedIcon(activity.getPackageManager(), app.component()),
+                                pack.fallbackSize(), draft.corners)};
+                Bitmap background = IconBackground.load(activity, draft.background, draft.backgroundScale);
+                Bitmap backdrop = background == null ? null : IconBackground.render(background, draft.shape,
+                        draft.corners, pack.fallbackSize(), draft.backgroundClip);
+                try {
+                    for (int i = 0; i < expected.length; i++) if (i == 2 || draft.backgroundAll) IconBackground.draw(expected[i], backdrop);
+                    runOnMainChecked(() -> {
+                        for (int i = 0; i < views.length; i++) check(
+                                ((android.graphics.drawable.BitmapDrawable) views[i].getDrawable()).getBitmap().sameAs(expected[i]),
+                                "Background preview scope, scale, shape and cache: " + mode + "/" + i);
+                    });
+                } finally {
+                    for (Bitmap bitmap : expected) bitmap.recycle();
+                    if (background != null) background.recycle();
+                    if (backdrop != null) backdrop.recycle();
+                }
+            }
+            MainActivity.IconChoice[] choice = new MainActivity.IconChoice[1];
+            android.widget.ImageView[] pickerImage = new android.widget.ImageView[1];
+            runOnMainChecked(() -> {
+                activity.showIcons(app, () -> {});
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "iconDialog");
+                android.widget.GridView grid = findGrid(dialog.getWindow().getDecorView());
+                choice[0] = (MainActivity.IconChoice) grid.getAdapter().getItem(0);
+                android.view.ViewGroup tile = (android.view.ViewGroup) grid.getAdapter().getView(0, null, grid);
+                pickerImage[0] = (android.widget.ImageView) ((android.view.ViewGroup) tile.getChildAt(0)).getChildAt(0);
+            });
+            waitForThumbnails(activity);
+            Bitmap background = IconBackground.load(activity, draft.background, draft.backgroundScale);
+            Bitmap backdrop = IconBackground.render(background, draft.shape, draft.corners, pack.fallbackSize(), draft.backgroundClip);
+            try {
+                runOnMainChecked(() -> {
+                    Bitmap expected = choice[0].source().render(choice[0].icon().name(), 128);
+                    IconBackground.draw(expected, backdrop);
+                    try { check(((android.graphics.drawable.BitmapDrawable) pickerImage[0].getDrawable()).getBitmap().sameAs(expected),
+                            "Manual icon catalogue displays the selected background"); }
+                    finally { expected.recycle(); }
+                    ((android.app.Dialog) field(activity, "iconDialog")).dismiss();
+                    var preview = MainActivity.class.getDeclaredMethod("previewFileIcon", String.class, Runnable.class, Bitmap.class);
+                    preview.setAccessible(true);
+                    preview.invoke(activity, app.key(), (Runnable) () -> {}, file.copy(Bitmap.Config.ARGB_8888, true));
+                });
+                waitForThumbnails(activity);
+                runOnMainChecked(() -> {
+                    android.app.Dialog dialog = (android.app.Dialog) field(activity, "fileIconDialog");
+                    android.view.ViewGroup content = (android.view.ViewGroup) dialog.findViewById(android.R.id.content);
+                    android.widget.ImageView image = (android.widget.ImageView) ((android.view.ViewGroup) content.getChildAt(0)).getChildAt(2);
+                    Bitmap expected = file.copy(Bitmap.Config.ARGB_8888, true);
+                    IconBackground.draw(expected, backdrop);
+                    try { check(((android.graphics.drawable.BitmapDrawable) image.getDrawable()).getBitmap().sameAs(expected),
+                            "File import preview displays the background under the original icon"); }
+                    finally { expected.recycle(); }
+                    findText(dialog.getWindow().getDecorView(), activity.getString(R.string.use_icon_file)).performClick();
+                });
+                waitForWork(activity);
+                Bitmap saved = pack.render(draft.overrides.get(app.key()), 192);
+                try { check(saved.sameAs(file), "File import stores the original icon without baking in its background"); }
+                finally { saved.recycle(); }
+            } finally { background.recycle(); backdrop.recycle(); }
+        } finally { file.recycle(); }
     }
 
     private void verifyPreviewOverlays(MainActivity activity) throws Exception {
@@ -1334,6 +1590,154 @@ public final class DeviceTests extends Instrumentation {
         } finally {
             pack.fileIcons = previousDirectory;
             overlay.recycle(); cover.recycle(); opaque.recycle(); blank.recycle();
+            File[] files = FileIcons.directory(isolated).listFiles();
+            if (files != null) for (File file : files) Files.deleteIfExists(file.toPath());
+            Files.deleteIfExists(FileIcons.directory(isolated).toPath());
+            File[] artifacts = directory.listFiles();
+            if (artifacts != null) for (File file : artifacts) Files.deleteIfExists(file.toPath());
+            Files.deleteIfExists(directory.toPath());
+        }
+    }
+
+    private void verifyBackground(Context context, IconRepository.Pack pack) throws Exception {
+        File directory = new File(context.getCacheDir(), "background-check");
+        Files.createDirectories(directory.toPath());
+        Context isolated = new android.content.ContextWrapper(context) {
+            @Override public File getFilesDir() { return directory; }
+        };
+        Bitmap background = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+        background.eraseColor(android.graphics.Color.GREEN);
+        Bitmap source = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+        android.graphics.Paint paint = new android.graphics.Paint();
+        paint.setColor(android.graphics.Color.RED);
+        new android.graphics.Canvas(source).drawRect(64, 64, 128, 128, paint);
+        Bitmap overlay = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+        paint.setColor(0x800000FF);
+        new android.graphics.Canvas(overlay).drawRect(0, 0, 192, 180, paint);
+        Bitmap blank = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+        Bitmap cover = Bitmap.createBitmap(720, 1280, Bitmap.Config.ARGB_8888);
+        File previousDirectory = pack.fileIcons;
+        try {
+            File input = new File(directory, "background.png");
+            try (FileOutputStream stream = new FileOutputStream(input)) {
+                background.compress(Bitmap.CompressFormat.PNG, 100, stream);
+            }
+            Bitmap imported = IconBackground.read(isolated, Uri.fromFile(input));
+            try { check(imported.sameAs(background), "Opaque PNG is a valid icon background"); }
+            finally { imported.recycle(); }
+            expectFailure(() -> IconBackground.validate(blank), "Empty backgrounds are rejected");
+            Bitmap under = source.copy(Bitmap.Config.ARGB_8888, true);
+            Bitmap expectedUnder = background.copy(Bitmap.Config.ARGB_8888, true);
+            try {
+                new android.graphics.Canvas(expectedUnder).drawBitmap(source, 0, 0, null);
+                IconBackground.draw(under, background);
+                check(under.sameAs(expectedUnder) && under.getPixel(96, 96) == android.graphics.Color.RED
+                                && under.getPixel(0, 0) == android.graphics.Color.GREEN,
+                        "Background is composed underneath, never covering the original icon");
+            } finally { under.recycle(); expectedUnder.recycle(); }
+            Bitmap noMask = IconBackground.render(background, IconShape.NONE, null, 172, true);
+            try { check(noMask.sameAs(background), "No mask leaves the background outline unchanged"); }
+            finally { noMask.recycle(); }
+            File jpeg = new File(directory, "background.jpg");
+            try (FileOutputStream stream = new FileOutputStream(jpeg)) {
+                background.compress(Bitmap.CompressFormat.JPEG, 95, stream);
+            }
+            expectFailure(() -> IconBackground.read(isolated, Uri.fromFile(jpeg)), "Non-PNG backgrounds are rejected");
+            Bitmap cornerOnly = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+            cornerOnly.setPixel(0, 0, android.graphics.Color.GREEN);
+            Bitmap clippedEmpty = IconBackground.render(cornerOnly, IconShape.CIRCLE, null, 172, true);
+            try { expectFailure(() -> IconBackground.validate(clippedEmpty), "A completely clipped-away background is rejected"); }
+            finally { cornerOnly.recycle(); clippedEmpty.recycle(); }
+            String reference = FileIcons.save(isolated, background);
+            Draft draft = new Draft();
+            check(!draft.toJson().has("background") && draft.backgroundClip && draft.backgroundScale == 100,
+                    "Old templates have no background and keep their JSON format");
+            draft.background = reference; draft.backgroundAll = true; draft.backgroundClip = false; draft.backgroundScale = 150;
+            check(draft.hasUnsavedChanges(isolated), "A background-only draft is not treated as empty");
+            Draft restored = Draft.fromJson(draft.toJson());
+            check(restored.background.equals(reference) && restored.backgroundAll
+                            && !restored.backgroundClip && restored.backgroundScale == 150,
+                    "Background source, scope, scale and clipping round-trip");
+            for (int invalid : new int[]{49, 151}) {
+                expectFailure(() -> Draft.fromJson(draft.toJson().put("backgroundScale", invalid)),
+                        "Invalid saved background scale is rejected");
+                expectFailure(() -> IconBackground.load(isolated, reference, invalid),
+                        "Invalid background render scale is rejected");
+            }
+            TemplateStore store = new TemplateStore(isolated);
+            TemplateStore.Entry saved = store.save(draft, pack.label, false);
+            check(saved.fileIcons().has(reference), "Template embeds original background bytes");
+            File stored = new File(FileIcons.directory(isolated), IconRepository.resourceName(reference) + ".png");
+            Files.delete(stored.toPath());
+            Draft reopened = store.open(saved.id());
+            Bitmap restoredImage = IconBackground.load(isolated, reopened.background);
+            try { check(restoredImage.sameAs(background), "Template restores the original background after deletion"); }
+            finally { restoredImage.recycle(); }
+            String iconReference = FileIcons.save(isolated, source);
+            pack.fileIcons = FileIcons.directory(isolated);
+            IconRepository.App app = new IconRepository.App(
+                    new ComponentName("dev.test.background", "dev.test.background.Main"), "Background");
+            Map<String, String> overrides = Map.of(app.key(), iconReference);
+            Bitmap smaller = IconBackground.load(isolated, reference, 50);
+            try {
+                check(IconRepository.Pack.visibleBounds(smaller).width() == 96
+                                && IconRepository.Pack.visibleBounds(smaller).centerX() == 96,
+                        "50 percent background occupies a centred half-size square");
+            } finally { smaller.recycle(); }
+            for (boolean all : new boolean[]{false, true}) for (boolean clip : new boolean[]{false, true}) {
+                IconShape shape = IconShape.CUSTOM;
+                int[] corners = {100, 100, 100, 100};
+                Bitmap scaled = IconBackground.load(isolated, reference, 150);
+                Bitmap backdrop = IconBackground.render(scaled, shape, corners, pack.fallbackSize(), clip);
+                Bitmap activeOverlay = all && clip ? overlay : null;
+                Bitmap border = activeOverlay == null ? blank.copy(Bitmap.Config.ARGB_8888, true)
+                        : IconOverlay.border(activeOverlay, shape, corners, pack.fallbackSize(), true);
+                ThemeEngine.Built built = ThemeEngine.build(isolated, "Background check", false, shape, corners,
+                        false, pack, List.of(app), overrides, cover, null, activeOverlay, true, true,
+                        scaled, all, clip, (done, total) -> {});
+                try (ZipFile archive = new ZipFile(built.file());
+                     ZipInputStream icons = new ZipInputStream(archive.getInputStream(archive.getEntry("icons")))) {
+                    boolean foundIcon = false, foundBackground = false, foundBorder = false;
+                    for (ZipEntry entry; (entry = icons.getNextEntry()) != null;) {
+                        String name = entry.getName();
+                        if (!List.of("dev.test.background.png", "icon_background.png", "icon_border.png").contains(name)) continue;
+                        byte[] bytes = icons.readAllBytes();
+                        Bitmap actual = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                        Bitmap expected = name.equals("icon_background.png") ? backdrop.copy(Bitmap.Config.ARGB_8888, true)
+                                : name.equals("icon_border.png") ? border.copy(Bitmap.Config.ARGB_8888, true)
+                                : source.copy(Bitmap.Config.ARGB_8888, true);
+                        try {
+                            if (name.equals("dev.test.background.png")) {
+                                IconOverlay.draw(expected, activeOverlay, true);
+                                if (all) IconBackground.draw(expected, backdrop);
+                                foundIcon = true;
+                                if (all && clip) check(actual.getPixel(96, 32) == android.graphics.Color.GREEN,
+                                        "Overlay clipping uses original icon alpha, not the added background");
+                            }
+                            foundBackground |= name.equals("icon_background.png");
+                            foundBorder |= name.equals("icon_border.png");
+                            check(actual.sameAs(expected), "Theme background composition and scope: " + all + "/" + clip + "/" + name);
+                        } finally { actual.recycle(); expected.recycle(); }
+                    }
+                    check(foundIcon && foundBackground && foundBorder,
+                            "Background export contains native background, border and application icon");
+                    check(android.graphics.Color.alpha(backdrop.getPixel(0, 0)) == (clip ? 0 : 255),
+                            "Background clipping follows the selected custom shape");
+                    expectFailure(() -> ThemeEngine.verifyArchive(built.file(), 1, shape, corners, false,
+                                    pack.fallbackSize(), false, border),
+                            "Archive verification rejects an unexpected background");
+                    Bitmap with = ThemeEngine.cover(pack, List.of(app), overrides, activeOverlay, true, backdrop);
+                    Bitmap without = ThemeEngine.cover(pack, List.of(app), overrides, activeOverlay, true);
+                    try { check(!with.sameAs(without), "Auto-cover displays the icon background"); }
+                    finally { with.recycle(); without.recycle(); }
+                } finally {
+                    Files.deleteIfExists(built.file().toPath());
+                    scaled.recycle(); backdrop.recycle(); border.recycle();
+                }
+            }
+        } finally {
+            pack.fileIcons = previousDirectory;
+            background.recycle(); source.recycle(); overlay.recycle(); blank.recycle(); cover.recycle();
             File[] files = FileIcons.directory(isolated).listFiles();
             if (files != null) for (File file : files) Files.deleteIfExists(file.toPath());
             Files.deleteIfExists(FileIcons.directory(isolated).toPath());
@@ -1757,6 +2161,10 @@ public final class DeviceTests extends Instrumentation {
         settings.overlay = "";
         settings.overlayAll = false;
         settings.overlayScale = 100;
+        settings.background = "";
+        settings.backgroundAll = false;
+        settings.backgroundScale = 100;
+        settings.backgroundClip = true;
         File directory = new File(activity.getCacheDir(), "template-export-check");
         Files.createDirectories(directory.toPath());
         Context isolated = new android.content.ContextWrapper(activity) {
@@ -1954,6 +2362,17 @@ public final class DeviceTests extends Instrumentation {
                 dialog = (android.app.AlertDialog) field(activity, "errorDialog");
                 if (dialog != null) dialog.dismiss();
             });
+            Uri children = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(
+                    tree, android.provider.DocumentsContract.getTreeDocumentId(tree));
+            try (var cursor = activity.getContentResolver().query(children,
+                    new String[]{android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME}, null, null, null)) {
+                if (cursor == null) throw new java.io.IOException("Cannot enumerate temporary integration themes");
+                while (cursor.moveToNext()) {
+                    String filename = cursor.getString(0);
+                    if (filename.startsWith(templateTitle) && filename.endsWith(".hnt") && !filenames.contains(filename))
+                        filenames.add(filename);
+                }
+            }
             for (String filename : filenames) {
                 Uri document = ThemeEngine.findDocument(activity.getContentResolver(), tree, filename);
                 if (document != null) check(android.provider.DocumentsContract.deleteDocument(activity.getContentResolver(), document),

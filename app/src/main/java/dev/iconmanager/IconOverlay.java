@@ -12,18 +12,24 @@ final class IconOverlay {
     static final int MIN_SCALE = 50, MAX_SCALE = 150;
 
     static Bitmap read(Context context, Uri uri) throws IOException {
+        Bitmap bitmap = readLayer(context, uri, R.string.overlay_invalid);
+        try { validate(bitmap); return bitmap; }
+        catch (IOException | RuntimeException error) { bitmap.recycle(); throw error; }
+    }
+
+    static Bitmap readLayer(Context context, Uri uri, int invalidMessage) throws IOException {
         Bitmap bitmap = android.graphics.ImageDecoder.decodeBitmap(
                 android.graphics.ImageDecoder.createSource(context.getContentResolver(), uri), (decoder, info, source) -> {
                     if (!"image/png".equals(info.getMimeType()) || info.getSize().getWidth() != info.getSize().getHeight()) {
-                        throw new IllegalArgumentException(context.getString(R.string.overlay_invalid));
+                        throw new IllegalArgumentException(context.getString(invalidMessage));
                     }
                     decoder.setAllocator(android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE);
                     decoder.setTargetSize(IconShape.SIZE, IconShape.SIZE);
                 });
         try {
-            validate(bitmap);
+            validateRendered(bitmap, invalidMessage, invalidMessage);
             return bitmap;
-        } catch (IOException error) { bitmap.recycle(); throw error; }
+        } catch (IOException | RuntimeException error) { bitmap.recycle(); throw error; }
     }
 
     static void validate(Bitmap bitmap) throws IOException {
@@ -57,8 +63,12 @@ final class IconOverlay {
     }
 
     static Bitmap scaled(Bitmap overlay, int scale) {
+        return scaled(overlay, scale, R.string.overlay_scale_invalid);
+    }
+
+    static Bitmap scaled(Bitmap overlay, int scale, int invalidMessage) {
         if (scale < MIN_SCALE || scale > MAX_SCALE) {
-            throw new IllegalArgumentException(App.text(R.string.overlay_scale_invalid));
+            throw new IllegalArgumentException(App.text(invalidMessage));
         }
         Bitmap result = Bitmap.createBitmap(IconShape.SIZE, IconShape.SIZE, Bitmap.Config.ARGB_8888);
         float size = IconShape.SIZE * scale / 100f;
@@ -71,13 +81,17 @@ final class IconOverlay {
 
     /** Scaled or clipped overlays may legitimately fill the whole canvas, so only size and visibility matter. */
     static void validateRendered(Bitmap bitmap) throws IOException {
+        validateRendered(bitmap, R.string.overlay_invalid, R.string.overlay_clipped_empty);
+    }
+
+    static void validateRendered(Bitmap bitmap, int invalidMessage, int emptyMessage) throws IOException {
         if (bitmap.getWidth() != IconShape.SIZE || bitmap.getHeight() != IconShape.SIZE) {
-            throw new IOException(App.text(R.string.overlay_invalid));
+            throw new IOException(App.text(invalidMessage));
         }
         for (int y = 0; y < bitmap.getHeight(); y++) for (int x = 0; x < bitmap.getWidth(); x++) {
             if (android.graphics.Color.alpha(bitmap.getPixel(x, y)) > 0) return;
         }
-        throw new IOException(App.text(R.string.overlay_clipped_empty));
+        throw new IOException(App.text(emptyMessage));
     }
 
     /** Returns the native icon_border bitmap, optionally clipped to the fallback mask silhouette. */

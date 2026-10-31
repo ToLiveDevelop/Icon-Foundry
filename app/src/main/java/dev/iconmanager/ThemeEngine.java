@@ -445,23 +445,45 @@ final class ThemeEngine {
                        boolean clearFolderBackground, IconRepository.Pack pack, List<IconRepository.App> apps,
                        Map<String, String> overrides, Bitmap cover, File wallpaper, Bitmap overlay, boolean overlayAll,
                        boolean overlayClip, Progress progress) throws Exception {
+        return build(context, title, fullPack, shape, corners, clearFolderBackground, pack, apps, overrides,
+                cover, wallpaper, overlay, overlayAll, overlayClip, null, false, true, progress);
+    }
+
+    static Built build(Context context, String title, boolean fullPack, IconShape shape, int[] corners,
+                       boolean clearFolderBackground, IconRepository.Pack pack, List<IconRepository.App> apps,
+                       Map<String, String> overrides, Bitmap cover, File wallpaper, Bitmap overlay, boolean overlayAll,
+                       boolean overlayClip, Bitmap background, boolean backgroundAll, boolean backgroundClip,
+                       Progress progress) throws Exception {
         if (overlay != null) IconOverlay.validateRendered(overlay);
+        if (background != null) IconBackground.validate(background);
         Map<String, String> targets = exportTargets(apps, pack, overrides, fullPack);
         int count = exportCount(apps, pack, overrides, fullPack);
         if (count == 0) throw new IOException(context.getString(R.string.empty_export));
         int maskSize = shape == IconShape.NONE ? IconShape.SIZE - 2 * IconShape.INSET : pack.fallbackSize();
         Bitmap border = overlay == null ? null : IconOverlay.border(overlay, shape, corners, maskSize, overlayClip);
+        Bitmap backdrop = null;
         try {
             if (border != null) IconOverlay.validateRendered(border);
+            if (background != null) {
+                backdrop = IconBackground.render(background, shape, corners, maskSize, backgroundClip);
+                IconBackground.validate(backdrop);
+                // HONOR's legacy background loader requires a border, even when it is invisible.
+                if (border == null) border = Bitmap.createBitmap(IconShape.SIZE, IconShape.SIZE, Bitmap.Config.ARGB_8888);
+            }
             return build(context, title, shape, corners, clearFolderBackground, pack, cover,
-                    wallpaper, overlay, border, overlayAll, overlayClip, targets, count, maskSize, progress);
-        } finally { if (border != null) border.recycle(); }
+                    wallpaper, overlay, border, overlayAll, overlayClip, backdrop, backgroundAll,
+                    targets, count, maskSize, progress);
+        } finally {
+            if (border != null) border.recycle();
+            if (backdrop != null) backdrop.recycle();
+        }
     }
 
     private static Built build(Context context, String title, IconShape shape, int[] corners,
                                boolean clearFolderBackground, IconRepository.Pack pack,
                                Bitmap cover, File wallpaper, Bitmap overlay, Bitmap border, boolean overlayAll,
-                               boolean overlayClip, Map<String, String> targets, int count, int maskSize,
+                               boolean overlayClip, Bitmap background, boolean backgroundAll,
+                               Map<String, String> targets, int count, int maskSize,
                                Progress progress) throws Exception {
         byte[] wallpaperBytes = wallpaper == null ? null : java.nio.file.Files.readAllBytes(wallpaper.toPath());
         if (wallpaperBytes != null) verifyWallpaper(wallpaperBytes);
@@ -476,6 +498,7 @@ final class ThemeEngine {
                     Bitmap icon = pack.render(target.getValue(), EXPORT_ICON_SIZE);
                     try {
                         if (overlayAll) IconOverlay.draw(icon, overlay, overlayClip);
+                        if (backgroundAll) IconBackground.draw(icon, background);
                         put(zip, target.getKey() + ".png", png(icon));
                     }
                     finally { icon.recycle(); }
@@ -487,6 +510,7 @@ final class ThemeEngine {
                     finally { mask.recycle(); }
                 }
                 if (border != null) put(zip, "icon_border.png", png(border));
+                if (background != null) put(zip, "icon_background.png", png(background));
             }
             try (ZipOutputStream zip = new ZipOutputStream(new FileOutputStream(result))) {
                 put(zip, "preview/", new byte[0]);
@@ -511,7 +535,8 @@ final class ThemeEngine {
                     put(zip, "preview/icon_small.jpg", thumbnail.toByteArray());
                 } finally { if (small != cover) small.recycle(); }
             }
-            verifyArchive(result, targets.size(), shape, corners, clearFolderBackground, maskSize, wallpaper != null, border);
+            verifyArchive(result, targets.size(), shape, corners, clearFolderBackground, maskSize,
+                    wallpaper != null, border, background);
             complete = true;
             return new Built(result, count);
         } finally {
@@ -549,12 +574,22 @@ final class ThemeEngine {
                          List<IconRepository.App> apps, Map<String, String> overrides, Bitmap cover, Uri tree,
                          Uri replace, File wallpaper, Bitmap overlay, boolean overlayAll, boolean overlayClip,
                          Progress progress) throws Exception {
+        return export(context, title, filename, fullPack, shape, corners, clearFolderBackground, pack,
+                apps, overrides, cover, tree, replace, wallpaper, overlay, overlayAll, overlayClip,
+                null, false, true, progress);
+    }
+
+    static Result export(Context context, String title, String filename, boolean fullPack, IconShape shape,
+                         int[] corners, boolean clearFolderBackground, IconRepository.Pack pack,
+                         List<IconRepository.App> apps, Map<String, String> overrides, Bitmap cover, Uri tree,
+                         Uri replace, File wallpaper, Bitmap overlay, boolean overlayAll, boolean overlayClip,
+                         Bitmap background, boolean backgroundAll, boolean backgroundClip, Progress progress) throws Exception {
         validateTree(context, tree);
         ContentResolver resolver = context.getContentResolver();
         Uri existing = findDocument(resolver, tree, filename);
         if (existing != null && !existing.equals(replace)) throw new IOException(context.getString(R.string.file_exists));
         Built built = build(context, title, fullPack, shape, corners, clearFolderBackground, pack, apps, overrides,
-                cover, wallpaper, overlay, overlayAll, overlayClip, progress);
+                cover, wallpaper, overlay, overlayAll, overlayClip, background, backgroundAll, backgroundClip, progress);
         File result = built.file();
         Uri created = null;
         try {
@@ -750,6 +785,11 @@ final class ThemeEngine {
 
     static Bitmap cover(IconRepository.Pack pack, List<IconRepository.App> apps, Map<String, String> overrides,
                         Bitmap overlay, boolean overlayClip) throws IOException {
+        return cover(pack, apps, overrides, overlay, overlayClip, null);
+    }
+
+    static Bitmap cover(IconRepository.Pack pack, List<IconRepository.App> apps, Map<String, String> overrides,
+                        Bitmap overlay, boolean overlayClip, Bitmap background) throws IOException {
         Bitmap bitmap = Bitmap.createBitmap(720, 1280, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
         canvas.drawColor(Color.BLACK);
@@ -767,6 +807,7 @@ final class ThemeEngine {
                 Bitmap icon = pack.render(selected, 140);
                 try {
                     IconOverlay.draw(icon, overlay, overlayClip);
+                    IconBackground.draw(icon, background);
                     canvas.drawBitmap(icon, 60 + (index % 3) * 230, 290 + (index / 3) * 230, paint);
                 } finally { icon.recycle(); }
                 index++;
@@ -830,6 +871,11 @@ final class ThemeEngine {
 
     static void verifyArchive(File file, int targetCount, IconShape shape, int[] corners, boolean clearFolderBackground,
                               int maskSize, boolean wallpaper, Bitmap overlay) throws IOException {
+        verifyArchive(file, targetCount, shape, corners, clearFolderBackground, maskSize, wallpaper, overlay, null);
+    }
+
+    static void verifyArchive(File file, int targetCount, IconShape shape, int[] corners, boolean clearFolderBackground,
+                              int maskSize, boolean wallpaper, Bitmap overlay, Bitmap background) throws IOException {
         try (ZipFile zip = new ZipFile(file)) {
             if (zip.size() != (clearFolderBackground ? 7 : 6) + (wallpaper ? 3 : 0)
                     || zip.getEntry("description.xml") == null || zip.getEntry("icons") == null
@@ -872,9 +918,21 @@ final class ThemeEngine {
                 int count = 0;
                 boolean hasMask = false;
                 boolean hasOverlay = false;
+                boolean hasBackground = false;
                 byte[] buffer = new byte[8192];
                 for (ZipEntry entry; (entry = nested.getNextEntry()) != null;) {
                     String name = entry.getName();
+                    if (name.equals("icon_background.png")) {
+                        if (hasBackground || background == null) throw new IOException(App.text(R.string.background_archive_error));
+                        byte[] bytes = nested.readNBytes(1024 * 1024);
+                        Bitmap actual = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                        if (actual == null) throw new IOException(App.text(R.string.background_archive_error));
+                        try {
+                            if (!actual.sameAs(background)) throw new IOException(App.text(R.string.background_archive_error));
+                        } finally { actual.recycle(); }
+                        hasBackground = true;
+                        continue;
+                    }
                     if (name.equals("icon_border.png")) {
                         if (hasOverlay || overlay == null) throw new IOException(App.text(R.string.overlay_archive_error));
                         byte[] bytes = nested.readNBytes(1024 * 1024);
@@ -913,6 +971,7 @@ final class ThemeEngine {
                 if (count != targetCount) throw new IOException(App.text(R.string.icons_incomplete));
                 if (hasMask != (shape != IconShape.NONE)) throw new IOException(App.text(R.string.mask_missing));
                 if (hasOverlay != (overlay != null)) throw new IOException(App.text(R.string.overlay_archive_error));
+                if (hasBackground != (background != null)) throw new IOException(App.text(R.string.background_archive_error));
             }
         }
     }

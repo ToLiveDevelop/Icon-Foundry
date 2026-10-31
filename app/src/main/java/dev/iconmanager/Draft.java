@@ -24,6 +24,10 @@ final class Draft {
     boolean overlayAll;
     int overlayScale = 100;
     boolean overlayClip = true;
+    String background = "";
+    boolean backgroundAll;
+    int backgroundScale = 100;
+    boolean backgroundClip = true;
     IconShape shape = IconShape.ROUNDED_SQUARE;
     int[] corners = IconShape.DEFAULT_CORNERS.clone();
     final Map<String, String> overrides = new LinkedHashMap<>();
@@ -56,6 +60,16 @@ final class Draft {
             throw new JSONException(App.text(R.string.overlay_scale_invalid));
         }
         d.overlayClip = j.optBoolean("overlayClip", true);
+        d.background = j.optString("background");
+        if (!d.background.isEmpty() && !FileIcons.isFile(d.background)) {
+            throw new JSONException(App.text(R.string.background_invalid));
+        }
+        d.backgroundAll = j.optBoolean("backgroundAll");
+        d.backgroundScale = j.optInt("backgroundScale", 100);
+        if (d.backgroundScale < IconOverlay.MIN_SCALE || d.backgroundScale > IconOverlay.MAX_SCALE) {
+            throw new JSONException(App.text(R.string.background_scale_invalid));
+        }
+        d.backgroundClip = j.optBoolean("backgroundClip", true);
         JSONArray corners = j.optJSONArray("corners");
         if (corners != null) {
             if (corners.length() != 4) throw new JSONException(App.text(R.string.corners_invalid));
@@ -93,7 +107,7 @@ final class Draft {
 
     boolean hasUnsavedChanges(Context context) {
         if (packs.isEmpty() && title.isEmpty() && overrides.isEmpty() && coverPath.isEmpty()
-                && wallpaperPath.isEmpty() && overlay.isEmpty()) {
+                && wallpaperPath.isEmpty() && overlay.isEmpty() && background.isEmpty()) {
             return false;
         }
         if (templateId.isEmpty()) return true;
@@ -115,6 +129,7 @@ final class Draft {
                 if (file.isFile()) digest.update(java.nio.file.Files.readAllBytes(file.toPath()));
             }
             if (!overlay.isEmpty()) digest.update(FileIcons.bytes(context, overlay));
+            if (!background.isEmpty()) digest.update(FileIcons.bytes(context, background));
         }
         StringBuilder hex = new StringBuilder();
         for (byte value : digest.digest()) hex.append(String.format(java.util.Locale.ROOT, "%02x", value));
@@ -137,6 +152,11 @@ final class Draft {
         if (!overlay.isEmpty()) j.put("overlay", overlay).put("overlayAll", overlayAll);
         if (!overlay.isEmpty() && overlayScale != 100) j.put("overlayScale", overlayScale);
         if (!overlay.isEmpty() && !overlayClip) j.put("overlayClip", false);
+        if (!background.isEmpty()) {
+            j.put("background", background).put("backgroundAll", backgroundAll);
+            if (backgroundScale != 100) j.put("backgroundScale", backgroundScale);
+            if (!backgroundClip) j.put("backgroundClip", false);
+        }
         if (shape == IconShape.CUSTOM) {
             JSONArray values = new JSONArray();
             for (int corner : corners) values.put(corner);
@@ -150,6 +170,7 @@ final class Draft {
     List<String> fileReferences() {
         List<String> references = new ArrayList<>(overrides.values());
         if (!overlay.isEmpty()) references.add(overlay);
+        if (!background.isEmpty()) references.add(background);
         return references;
     }
 

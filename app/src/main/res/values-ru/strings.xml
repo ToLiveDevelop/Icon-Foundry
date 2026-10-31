@@ -25,6 +25,20 @@
     <string name="overlay_help">Квадратный PNG с прозрачным фоном и центром: рамка, блики или декор. Желательно 192 × 192 px; другой размер масштабируется до 192 × 192 без обрезки. Это верхний слой icon_border.png, не маска обрезки. Прозрачные участки показывают иконку, непрозрачные закрывают её. Для иконок без замены слой накладывает HONOR, для паков и файлов в режиме «Все» — Icon Foundry при экспорте. Копия сохраняется в шаблоне.</string>
     <string name="overlay_invalid">Нужен квадратный PNG с видимым рисунком и полностью прозрачными участками. Не используйте сплошную картинку или пустой файл.</string>
     <string name="overlay_archive_error">Накладка в архиве темы отсутствует или повреждена.</string>
+    <string name="background_title">Фон под иконками</string>
+    <string name="choose_background">Выбрать PNG</string>
+    <string name="remove_background">Убрать фон</string>
+    <string name="use_background">Использовать фон</string>
+    <string name="background_preview">Пример фона под иконкой</string>
+    <string name="background_help">Квадратный PNG, желательно 192 × 192 px. Может быть непрозрачным или с прозрачностью. Фон рисуется под иконкой и виден в прозрачных участках; существующий фон самой иконки он не заменяет. Масштаб и обрезка — в окне выбора формы. В режиме «Все» фон добавляется также к иконкам паков и файлов. Копия сохраняется в шаблоне.</string>
+    <string name="background_scale">Масштаб фона: %1$d%%</string>
+    <string name="background_scale_help" formatted="false">50–150%, по центру холста 192 × 192. Предпросмотр меняется сразу. Для сохранения нажмите «Применить»; исходный PNG не меняется.</string>
+    <string name="background_scale_invalid" formatted="false">Масштаб фона должен быть от 50% до 150%.</string>
+    <string name="background_clip">Обрезать фон по форме</string>
+    <string name="background_clip_help">Скрывает фон за пределами выбранной формы. «Без маски» сохраняет собственный контур PNG. Сами иконки паков и файлов не обрезаются.</string>
+    <string name="background_invalid">Нужен квадратный PNG с видимым рисунком. Полностью прозрачное изображение не подходит для фона.</string>
+    <string name="background_clipped_empty">После масштабирования и обрезки от фона ничего не осталось.</string>
+    <string name="background_archive_error">Фон в архиве темы отсутствует или повреждён.</string>
     <string name="app_name">Icon Foundry</string>
     <string name="tagline">Иконпаки → темы HONOR</string>
     <string name="intro">Тема иконок для MagicOS 10+; обои — по желанию. Применяется вручную.</string>
