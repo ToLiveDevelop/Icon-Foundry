@@ -87,6 +87,7 @@ public final class MainActivity extends Activity {
     private String pendingIconApp;
     private Runnable pendingIconChanged;
     private Dialog fileIconDialog;
+    private Dialog helpDialog;
     private Dialog settingsDialog, overlayDialog, shapeDialog, backgroundDialog;
     private java.util.function.Consumer<MaskSelection> pendingShapeMaskImport;
     private RadioGroup exportScope;
@@ -266,6 +267,101 @@ public final class MainActivity extends Activity {
         return button;
     }
 
+    private android.widget.ImageButton helpButton(int title, int... texts) {
+        return helpButton(getString(title), texts);
+    }
+
+    private android.widget.ImageButton helpButton(String title, int... texts) {
+        android.widget.ImageButton button = iconButton(R.drawable.ic_help, R.string.help, view -> showHelp(title, texts));
+        button.setTag("help-" + getResources().getResourceEntryName(texts[0]));
+        button.setContentDescription(getString(R.string.help_about, title));
+        button.setTooltipText(getString(R.string.help));
+        button.setImageTintList(ColorStateList.valueOf(ACCENT_TEXT));
+        button.setBackground(buttonSurface(CONTROL, 24));
+        return button;
+    }
+
+    /** Places a help button after a heading view while letting the heading keep its full width. */
+    private LinearLayout withHelp(View heading, String title, int... texts) {
+        LinearLayout line = row();
+        line.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(48), dp(48));
+        params.setMarginStart(dp(8));
+        line.addView(helpButton(title, texts), params);
+        return line;
+    }
+
+    private void showHelp(String title, int... texts) {
+        if (helpDialog != null) helpDialog.dismiss();
+        Dialog dialog = new Dialog(this, android.R.style.Theme_Material_Dialog_NoActionBar);
+        helpDialog = dialog;
+        LinearLayout content = column();
+        content.setTag("help-dialog");
+        content.setPadding(dp(24), dp(20), dp(24), dp(16));
+        content.setBackground(rounded(PANEL, 28));
+        LinearLayout heading = row();
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(R.drawable.ic_help);
+        icon.setImageTintList(ColorStateList.valueOf(ACCENT_TEXT));
+        icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        heading.addView(icon, new LinearLayout.LayoutParams(dp(28), dp(28)));
+        TextView label = text(title, 22, INK);
+        label.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        label.setAccessibilityHeading(true);
+        LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(0, -2, 1);
+        labelParams.setMarginStart(dp(12));
+        heading.addView(label, labelParams);
+        content.addView(heading);
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout paragraphs = column();
+        for (int text : texts) {
+            TextView paragraph = text(getString(text), 16, INK);
+            paragraph.setTag("help-text");
+            paragraph.setLineSpacing(0, 1.25f);
+            paragraph.setPadding(0, dp(8), 0, dp(8));
+            paragraphs.addView(paragraph);
+        }
+        scroll.addView(paragraphs);
+        LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(-1, -2);
+        scrollParams.topMargin = dp(8);
+        content.addView(scroll, scrollParams);
+        Button close = button(R.string.close, view -> dialog.dismiss());
+        close.setTextColor(Color.BLACK);
+        close.setBackground(buttonSurface(ACCENT, 24));
+        LinearLayout.LayoutParams closeParams = new LinearLayout.LayoutParams(-1, -2);
+        closeParams.topMargin = dp(12);
+        content.addView(close, closeParams);
+        dialog.setContentView(content);
+        dialog.setOnDismissListener(ignored -> { if (helpDialog == dialog) helpDialog = null; });
+        dialog.show();
+        dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+        int width = Math.min(dp(440), getResources().getDisplayMetrics().widthPixels - dp(32));
+        int height = Math.round(getResources().getDisplayMetrics().heightPixels * 0.8f);
+        content.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        dialog.getWindow().setLayout(width, content.getMeasuredHeight() > height ? height : -2);
+    }
+
+    /** Wraps a slider with ±1 buttons; {@code stepped} receives values set by those buttons. */
+    private LinearLayout steppedSlider(SeekBar slider, java.util.function.IntConsumer stepped) {
+        LinearLayout line = row();
+        String tag = String.valueOf(slider.getTag());
+        for (int direction : new int[]{-1, 1}) {
+            android.widget.ImageButton arrow = iconButton(direction < 0 ? R.drawable.ic_chevron_left
+                    : R.drawable.ic_chevron_right, direction < 0 ? R.string.decrease : R.string.increase, view -> {
+                int value = Math.max(slider.getMin(), Math.min(slider.getMax(), slider.getProgress() + direction));
+                if (value == slider.getProgress()) return;
+                slider.setProgress(value);
+                stepped.accept(value);
+            });
+            arrow.setTag(tag + (direction < 0 ? "-decrease" : "-increase"));
+            arrow.setPadding(dp(10), dp(10), dp(10), dp(10));
+            if (direction > 0) line.addView(slider, new LinearLayout.LayoutParams(0, dp(48), 1));
+            line.addView(arrow, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        }
+        return line;
+    }
+
     private View settingsButton() {
         return iconButton(R.drawable.ic_settings, R.string.settings, view -> {
             if (busy) showError(new IOException(getString(R.string.busy)));
@@ -331,9 +427,11 @@ public final class MainActivity extends Activity {
         heading.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout header = row();
         header.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
+        LinearLayout.LayoutParams templatesHelpParams = new LinearLayout.LayoutParams(dp(48), dp(48));
+        templatesHelpParams.setMarginEnd(dp(12));
+        header.addView(helpButton(R.string.templates, R.string.templates_help), templatesHelpParams);
         header.addView(settingsButton(), new LinearLayout.LayoutParams(dp(48), dp(48)));
         root.addView(header, new LinearLayout.LayoutParams(-1, -2));
-        root.addView(text(getString(R.string.templates_help), 14, MUTED));
         Button create = button(R.string.new_theme, view -> {
             String tree = draft.tree;
             draft = new Draft();
@@ -468,9 +566,8 @@ public final class MainActivity extends Activity {
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout body = column();
         scroll.addView(body);
-        body.addView(text(getString(R.string.tagline), 28, INK));
-        body.addView(text(getString(R.string.intro), 14, MUTED));
-        LinearLayout packCard = card(body, R.string.pack);
+        body.addView(withHelp(text(getString(R.string.tagline), 28, INK), getString(R.string.tagline), R.string.intro));
+        LinearLayout packCard = card(body, R.string.pack, R.string.pack_priority_help);
         packList = column();
         packCard.addView(packList);
         packInfo = text("", 13, MUTED);
@@ -484,8 +581,8 @@ public final class MainActivity extends Activity {
         TextView titleLabel = text(getString(R.string.theme_title), 14, MUTED);
         title.setId(View.generateViewId());
         titleLabel.setLabelFor(title.getId());
-        identity.addView(titleLabel); identity.addView(title);
-        identity.addView(text(getString(R.string.filename_help), 13, MUTED));
+        identity.addView(withHelp(titleLabel, getString(R.string.theme_title), R.string.filename_help));
+        identity.addView(title);
         watch(title, value -> { draft.title = value; saveDraft(); updateExportEnabled(); });
         coverSection = new OptionalSection(body, R.string.cover, !draft.coverPath.isEmpty());
         LinearLayout cover = coverSection.content;
@@ -506,9 +603,9 @@ public final class MainActivity extends Activity {
         coverButtonParams.leftMargin = dp(16);
         coverRow.addView(coverButtons, coverButtonParams);
         cover.addView(coverRow);
-        wallpaperSection = new OptionalSection(body, R.string.wallpaper, !draft.wallpaperPath.isEmpty());
+        wallpaperSection = new OptionalSection(body, R.string.wallpaper, !draft.wallpaperPath.isEmpty(),
+                R.string.wallpaper_help);
         LinearLayout wallpaper = wallpaperSection.content;
-        wallpaper.addView(text(getString(R.string.wallpaper_help), 13, MUTED));
         LinearLayout wallpaperRow = row();
         wallpaperPreview = new ImageView(this);
         wallpaperPreview.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -522,9 +619,9 @@ public final class MainActivity extends Activity {
         wallpaperButtons.addView(removeWallpaper);
         wallpaperRow.addView(wallpaperButtons, new LinearLayout.LayoutParams(0, -2, 1));
         wallpaper.addView(wallpaperRow);
-        backgroundSection = new OptionalSection(body, R.string.background_title, !draft.background.isEmpty());
+        backgroundSection = new OptionalSection(body, R.string.background_title, !draft.background.isEmpty(),
+                R.string.background_help);
         LinearLayout background = backgroundSection.content;
-        background.addView(text(getString(R.string.background_help), 13, MUTED));
         LinearLayout backgroundButtons = row();
         backgroundButtons.addView(button(R.string.choose_background, view -> openFile(BACKGROUND_FILE, "image/png")),
                 new LinearLayout.LayoutParams(0, -2, 1));
@@ -547,9 +644,9 @@ public final class MainActivity extends Activity {
             draft.backgroundAll = id == backgroundScope.getChildAt(1).getId(); saveDraft(); refresh();
         });
         background.addView(backgroundScope);
-        overlaySection = new OptionalSection(body, R.string.overlay_title, !draft.overlay.isEmpty());
+        overlaySection = new OptionalSection(body, R.string.overlay_title, !draft.overlay.isEmpty(),
+                R.string.overlay_help);
         LinearLayout overlay = overlaySection.content;
-        overlay.addView(text(getString(R.string.overlay_help), 13, MUTED));
         LinearLayout overlayButtons = row();
         overlayButtons.addView(button(R.string.choose_overlay, view -> openFile(OVERLAY_FILE, "image/png")),
                 new LinearLayout.LayoutParams(0, -2, 1));
@@ -573,7 +670,8 @@ public final class MainActivity extends Activity {
         });
         overlay.addView(overlayScope);
         packCard = card(body, R.string.theme_options);
-        packCard.addView(text(getString(R.string.export_scope), 16, INK));
+        packCard.addView(withHelp(text(getString(R.string.export_scope), 16, INK),
+                getString(R.string.export_scope), R.string.scope_help));
         exportScope = new RadioGroup(this);
         RadioButton installedOnly = new RadioButton(this);
         installedOnly.setId(View.generateViewId());
@@ -587,8 +685,8 @@ public final class MainActivity extends Activity {
             draft.fullPack = id == entirePack.getId(); saveDraft(); refresh();
         });
         packCard.addView(exportScope);
-        packCard.addView(text(getString(R.string.scope_help), 13, MUTED));
-        packCard.addView(text(getString(R.string.fallback_shape), 16, INK));
+        packCard.addView(withHelp(text(getString(R.string.fallback_shape), 16, INK),
+                getString(R.string.fallback_shape), R.string.fallback_shape_help));
         LinearLayout shapeRow = row();
         shapePreview = new ImageView(this);
         shapePreview.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -598,7 +696,6 @@ public final class MainActivity extends Activity {
         shapeButton = button(R.string.choose_shape, view -> showShapePicker());
         shapeRow.addView(shapeButton, new LinearLayout.LayoutParams(0, -2, 1));
         packCard.addView(shapeRow);
-        packCard.addView(text(getString(R.string.fallback_shape_help), 13, MUTED));
         CheckBox folderBackground = new CheckBox(this);
         folderBackground.setText(R.string.folder_background);
         folderBackground.setTextColor(INK);
@@ -606,17 +703,15 @@ public final class MainActivity extends Activity {
         folderBackground.setOnCheckedChangeListener((view, checked) -> {
             draft.clearFolderBackground = checked; saveDraft();
         });
-        packCard.addView(folderBackground);
-        packCard.addView(text(getString(R.string.folder_background_help), 13, MUTED));
-        LinearLayout appCard = card(body, R.string.apps);
-        appCard.addView(text(getString(R.string.apps_help), 14, MUTED));
+        packCard.addView(withHelp(folderBackground, getString(R.string.folder_background),
+                R.string.folder_background_help));
+        LinearLayout appCard = card(body, R.string.apps, R.string.apps_help);
         appInfo = text("", 14, ACCENT_TEXT); appCard.addView(appInfo);
         appCard.addView(button(R.string.apps, view -> {
             if (pack == null) showError(new IOException(getString(R.string.no_pack)));
             else showApps();
         }));
-        LinearLayout destination = card(body, R.string.destination);
-        destination.addView(text(getString(R.string.destination_help), 14, MUTED));
+        LinearLayout destination = card(body, R.string.destination, R.string.destination_help);
         destinationButton = button(R.string.choose_destination, view -> {
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
                     .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
@@ -722,7 +817,7 @@ public final class MainActivity extends Activity {
                 }
                 if (drawable == null) drawable = getDrawable(R.drawable.app_icon);
                 String exampleName = example == null ? getString(R.string.app_name) : example.label();
-                Bitmap fileMask = IconMask.load(this, effects.shapeFile());
+                Bitmap fileMask = IconMask.load(this, effects.shapeFile(), effects.maskScale());
                 Bitmap source = IconShape.previewSource(drawable, shape != IconShape.NONE);
                 Bitmap preview;
                 int visibleSize = currentPack == null ? IconShape.SIZE - 2 * IconShape.INSET
@@ -757,7 +852,8 @@ public final class MainActivity extends Activity {
     private void showShapePicker() {
         Dialog dialog = fullDialog();
         shapeDialog = dialog;
-        LinearLayout layout = dialogLayout(dialog, getString(R.string.choose_shape));
+        LinearLayout layout = dialogLayout(dialog, getString(R.string.choose_shape), R.string.shape_preview_help,
+                draft.wallpaperPath.isEmpty() ? R.string.shape_preview_gradient : R.string.shape_preview_wallpaper);
         LinearLayout header = (LinearLayout) layout.getChildAt(0);
         LinearLayout.LayoutParams backParams = new LinearLayout.LayoutParams(dp(48), dp(48));
         backParams.setMarginEnd(dp(12));
@@ -789,11 +885,9 @@ public final class MainActivity extends Activity {
         String[] shapeFileReference = {draft.shapeFile};
         Bitmap[] importedMask = {null};
         int[] overlayScale = {draft.overlayScale};
+        int[] maskScale = {draft.maskScale};
         int[] backgroundScale = {draft.backgroundScale};
         boolean[] backgroundClip = {draft.backgroundClip};
-        content.addView(text(getString(wallpaperPath.isEmpty()
-                ? R.string.shape_preview_gradient : R.string.shape_preview_wallpaper), 12, MUTED));
-        content.addView(text(getString(R.string.shape_preview_help), 13, MUTED));
         IconShape[] selected = {draft.shape};
         IconShape[] preset = {draft.shape == IconShape.CUSTOM || draft.shape == IconShape.FILE
                 ? IconShape.ROUNDED_SQUARE : draft.shape};
@@ -827,7 +921,7 @@ public final class MainActivity extends Activity {
                 return;
             }
             Bitmap image = scene[0].render(selected[0], corners, overlayScale[0], overlayClip[0],
-                    backgroundScale[0], backgroundClip[0], mask);
+                    backgroundScale[0], backgroundClip[0], mask, maskScale[0]);
             preview.setImageBitmap(image);
             preview.setContentDescription(getString(R.string.shape_example, getString(selected[0].label),
                     String.join(", ", examples.stream().map(IconRepository.App::label).toList())));
@@ -844,8 +938,7 @@ public final class MainActivity extends Activity {
             clip.setTextColor(INK);
             clip.setChecked(backgroundClip[0]);
             clip.setOnCheckedChangeListener((view, checked) -> { backgroundClip[0] = checked; render.run(); });
-            content.addView(clip);
-            content.addView(text(getString(R.string.background_clip_help), 13, MUTED));
+            content.addView(withHelp(clip, getString(R.string.background_clip), R.string.background_clip_help));
         }
         if (!overlayReference.isEmpty()) {
             content.addView(createOverlayScaleControl(overlayScale[0], value -> {
@@ -858,8 +951,7 @@ public final class MainActivity extends Activity {
             clip.setTextColor(INK);
             clip.setChecked(overlayClip[0]);
             clip.setOnCheckedChangeListener((view, checked) -> { overlayClip[0] = checked; render.run(); });
-            content.addView(clip);
-            content.addView(text(getString(R.string.overlay_clip_help), 13, MUTED));
+            content.addView(withHelp(clip, getString(R.string.overlay_clip), R.string.overlay_clip_help));
         }
         LinearLayout tabs = row();
         tabs.setBackground(rounded(CONTROL, 24));
@@ -880,9 +972,8 @@ public final class MainActivity extends Activity {
         List<IconShape> shapes = List.of(IconShape.ROUNDED_SQUARE, IconShape.SQUIRCLE, IconShape.SQUARE, IconShape.CIRCLE,
                 IconShape.HEART, IconShape.STAR, IconShape.HEXAGON, IconShape.PENTAGON, IconShape.TEARDROP, IconShape.NONE);
         LinearLayout options = card(content, R.string.fallback_shape);
-        LinearLayout editor = card(content, R.string.shape_editor);
+        LinearLayout editor = card(content, R.string.shape_editor, R.string.shape_editor_help);
         editor.setTag("shape-editor");
-        editor.addView(text(getString(R.string.shape_editor_help), 13, MUTED));
         int[] cornerLabels = {R.string.corner_top_left, R.string.corner_top_right,
                 R.string.corner_bottom_right, R.string.corner_bottom_left};
         for (int i = 0; i < 4; i++) {
@@ -906,15 +997,16 @@ public final class MainActivity extends Activity {
                 @Override public void onStartTrackingTouch(SeekBar bar) {}
                 @Override public void onStopTrackingTouch(SeekBar bar) {}
             });
-            editor.addView(slider, new LinearLayout.LayoutParams(-1, dp(48)));
+            editor.addView(steppedSlider(slider, value -> {}), new LinearLayout.LayoutParams(-1, -2));
         }
-        LinearLayout fileEditor = card(content, R.string.shape_file_title);
+        LinearLayout fileEditor = card(content, R.string.shape_file_title, R.string.shape_file_help);
         fileEditor.setTag("shape-file");
-        fileEditor.addView(text(getString(R.string.shape_file_help), 13, MUTED));
         TextView fileStatus = text(getString(shapeFileReference[0].isEmpty()
                 ? R.string.shape_file_none : R.string.shape_file_selected), 14, INK);
         fileStatus.setTag("shape-file-status");
         fileEditor.addView(fileStatus);
+        fileEditor.addView(createScaleControl(maskScale[0], "mask-scale", R.string.mask_scale, R.string.mask_scale_help,
+                value -> { maskScale[0] = value; selected[0] = IconShape.FILE; render.run(); }));
         fileEditor.addView(button(R.string.choose_shape_file, view -> {
             pendingShapeMaskImport = selection -> {
                 if (shapeDialog != dialog) { selection.bitmap().recycle(); return; }
@@ -1009,9 +1101,11 @@ public final class MainActivity extends Activity {
             if (draft.shape != selected[0] || draft.overlayScale != overlayScale[0] || draft.overlayClip != overlayClip[0]
                     || draft.backgroundScale != backgroundScale[0] || draft.backgroundClip != backgroundClip[0]
                     || custom && !java.util.Arrays.equals(draft.corners, corners)
-                    || !draft.shapeFile.equals(fileMask ? shapeFileReference[0] : "")) {
+                    || !draft.shapeFile.equals(fileMask ? shapeFileReference[0] : "")
+                    || draft.maskScale != (fileMask ? maskScale[0] : 100)) {
                 draft.shape = selected[0];
                 draft.shapeFile = fileMask ? shapeFileReference[0] : "";
+                draft.maskScale = fileMask ? maskScale[0] : 100;
                 if (custom) draft.corners = corners.clone();
                 draft.overlayScale = overlayScale[0];
                 draft.overlayClip = overlayClip[0];
@@ -1138,7 +1232,7 @@ public final class MainActivity extends Activity {
                                            java.util.function.IntConsumer changed) {
         LinearLayout control = column();
         TextView label = text(getString(labelRes, initial), 14, INK);
-        control.addView(label);
+        control.addView(withHelp(label, getString(labelRes, initial).replaceAll("[:：]?\\s*\\d+\\s*%$", ""), helpRes));
         SeekBar slider = new SeekBar(this);
         slider.setTag(tag);
         slider.setMin(IconOverlay.MIN_SCALE);
@@ -1155,8 +1249,7 @@ public final class MainActivity extends Activity {
             @Override public void onStartTrackingTouch(SeekBar bar) {}
             @Override public void onStopTrackingTouch(SeekBar bar) {}
         });
-        control.addView(slider, new LinearLayout.LayoutParams(-1, dp(48)));
-        control.addView(text(getString(helpRes), 13, MUTED));
+        control.addView(steppedSlider(slider, changed), new LinearLayout.LayoutParams(-1, -2));
         return control;
     }
 
@@ -1165,8 +1258,7 @@ public final class MainActivity extends Activity {
         try { preview = previewLayer(background, true); }
         catch (IOException | RuntimeException error) { background.recycle(); showError(error); return; }
         Dialog dialog = fullDialog();
-        LinearLayout content = scrollingDialogLayout(dialog, getString(R.string.background_title));
-        content.addView(text(getString(R.string.background_help), 14, MUTED));
+        LinearLayout content = scrollingDialogLayout(dialog, getString(R.string.background_title), R.string.background_help);
         ImageView image = new ImageView(this);
         image.setImageBitmap(preview);
         image.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -1195,8 +1287,7 @@ public final class MainActivity extends Activity {
         try { preview = previewLayer(overlay, false); }
         catch (IOException | RuntimeException error) { overlay.recycle(); showError(error); return; }
         Dialog dialog = fullDialog();
-        LinearLayout content = scrollingDialogLayout(dialog, getString(R.string.overlay_title));
-        content.addView(text(getString(R.string.overlay_help), 14, MUTED));
+        LinearLayout content = scrollingDialogLayout(dialog, getString(R.string.overlay_title), R.string.overlay_help);
         ImageView image = new ImageView(this);
         image.setImageBitmap(preview);
         image.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -1223,7 +1314,7 @@ public final class MainActivity extends Activity {
         Bitmap preview = null, overlay = null, background = null, shapeMask = null;
         try {
             int visibleSize = pack == null ? IconShape.SIZE - 2 * IconShape.INSET : pack.fallbackSize();
-            shapeMask = IconMask.load(this, draft.shape == IconShape.FILE ? draft.shapeFile : "");
+            shapeMask = IconMask.load(this, draft.shape == IconShape.FILE ? draft.shapeFile : "", draft.maskScale);
             Bitmap source = IconShape.previewSource(getDrawable(R.drawable.app_icon));
             try { preview = draft.shape.preview(source, visibleSize, draft.corners, shapeMask); }
             finally { source.recycle(); }
@@ -1257,8 +1348,7 @@ public final class MainActivity extends Activity {
     private void cropCover(Bitmap source) {
         Dialog dialog = fullDialog();
         cropDialog = dialog;
-        LinearLayout layout = dialogLayout(dialog, getString(R.string.crop_cover));
-        layout.addView(text(getString(R.string.crop_help), 14, MUTED));
+        LinearLayout layout = dialogLayout(dialog, getString(R.string.crop_cover), R.string.crop_help);
         CoverCropView crop = new CoverCropView(this, source);
         layout.addView(crop, new LinearLayout.LayoutParams(-1, 0, 1));
         SeekBar zoom = new SeekBar(this);
@@ -1271,7 +1361,8 @@ public final class MainActivity extends Activity {
             @Override public void onStartTrackingTouch(SeekBar bar) {}
             @Override public void onStopTrackingTouch(SeekBar bar) {}
         });
-        layout.addView(zoom, new LinearLayout.LayoutParams(-1, dp(48)));
+        zoom.setTag("crop-zoom");
+        layout.addView(steppedSlider(zoom, value -> {}), new LinearLayout.LayoutParams(-1, -2));
         layout.addView(button(R.string.crop_use, view -> {
             Bitmap fitted = crop.crop();
             dialog.dismiss();
@@ -1408,8 +1499,8 @@ public final class MainActivity extends Activity {
     private void refreshPacks() {
         packList.removeAllViews();
         for (int i = 0; i < packs.size(); i++) packList.addView(packRow(i));
-        packInfo.setVisibility(packs.size() == 1 ? View.GONE : View.VISIBLE);
-        packInfo.setText(packs.isEmpty() ? R.string.no_pack : R.string.pack_priority_help);
+        packInfo.setVisibility(packs.isEmpty() ? View.VISIBLE : View.GONE);
+        packInfo.setText(R.string.no_pack);
         addPackButton.setVisibility(packs.size() >= IconRepository.MAX_PACKS ? View.GONE : View.VISIBLE);
         addPackButton.setText(packs.isEmpty() ? R.string.choose_pack : R.string.add_pack);
     }
@@ -1814,8 +1905,8 @@ public final class MainActivity extends Activity {
         LinearLayout content = column();
         content.setPadding(dp(24), dp(24), dp(24), dp(24));
         content.setBackground(rounded(PANEL, 24));
-        content.addView(text(getString(R.string.file_icon_preview), 22, INK));
-        content.addView(text(getString(R.string.file_icon_help), 14, MUTED));
+        content.addView(withHelp(text(getString(R.string.file_icon_preview), 22, INK),
+                getString(R.string.file_icon_preview), R.string.file_icon_help));
         ImageView preview = new ImageView(this);
         preview.setScaleType(ImageView.ScaleType.FIT_CENTER);
         preview.setPadding(dp(16), dp(16), dp(16), dp(16));
@@ -1886,7 +1977,7 @@ public final class MainActivity extends Activity {
             try {
                 var icon = IconRepository.unthemedIcon(getPackageManager(), app.component());
                 int visibleSize = currentPack == null ? IconShape.SIZE - 2 * IconShape.INSET : currentPack.fallbackSize();
-                mask = IconMask.load(this, effects.shapeFile());
+                mask = IconMask.load(this, effects.shapeFile(), effects.maskScale());
                 Bitmap bitmap = effects.shape().preview(icon, visibleSize, effects.corners(), mask);
                 withPreviewEffects(bitmap, effects, visibleSize, true, mask);
                 images.put(key, bitmap);
@@ -1927,22 +2018,22 @@ public final class MainActivity extends Activity {
 
     private record PreviewEffects(String overlay, int overlayScale, boolean overlayClip,
                                   String background, int backgroundScale, boolean backgroundClip,
-                                  IconShape shape, int[] corners, String shapeFile) {
+                                  IconShape shape, int[] corners, String shapeFile, int maskScale) {
         String key() {
             return overlay + ":" + overlayScale + ":" + overlayClip + ":" + background + ":" + backgroundScale
-                    + ":" + backgroundClip + ":" + shapeKey(shape, corners, shapeFile);
+                    + ":" + backgroundClip + ":" + shapeKey(shape, corners, shapeFile) + ":" + maskScale;
         }
     }
 
     private PreviewEffects previewEffects(boolean fallback) {
         return new PreviewEffects(fallback || draft.overlayAll ? draft.overlay : "", draft.overlayScale, draft.overlayClip,
                 fallback || draft.backgroundAll ? draft.background : "", draft.backgroundScale, draft.backgroundClip,
-                draft.shape, draft.corners.clone(), draft.shape == IconShape.FILE ? draft.shapeFile : "");
+                draft.shape, draft.corners.clone(), draft.shape == IconShape.FILE ? draft.shapeFile : "", draft.maskScale);
     }
 
     private Bitmap withPreviewEffects(Bitmap image, PreviewEffects effects, int visibleSize, boolean fallback) throws IOException {
         Bitmap shapeMask;
-        try { shapeMask = IconMask.load(this, effects.shapeFile()); }
+        try { shapeMask = IconMask.load(this, effects.shapeFile(), effects.maskScale()); }
         catch (IOException | RuntimeException error) { image.recycle(); throw error; }
         try { return withPreviewEffects(image, effects, visibleSize, fallback, shapeMask); }
         finally { if (shapeMask != null) shapeMask.recycle(); }
@@ -2033,7 +2124,7 @@ public final class MainActivity extends Activity {
             try {
                 overlay = IconOverlay.load(this, snapshot.overlay, snapshot.overlayScale);
                 background = IconBackground.load(this, snapshot.background, snapshot.backgroundScale);
-                shapeMask = IconMask.load(this, snapshot.shapeFile);
+                shapeMask = IconMask.load(this, snapshot.shapeFile, snapshot.maskScale);
                 if (background != null && snapshot.backgroundAll) {
                     backdrop = IconBackground.render(background, shape, snapshot.corners,
                             currentPack.fallbackSize(), snapshot.backgroundClip, shapeMask);
@@ -2200,8 +2291,8 @@ public final class MainActivity extends Activity {
         errorDialog = new AlertDialog.Builder(this).setTitle(R.string.error_title).setMessage(message).show();
     }
     private Dialog fullDialog() { return new Dialog(this, R.style.AppTheme); }
-    private LinearLayout scrollingDialogLayout(Dialog dialog, String heading) {
-        LinearLayout layout = dialogLayout(dialog, heading);
+    private LinearLayout scrollingDialogLayout(Dialog dialog, String heading, int... help) {
+        LinearLayout layout = dialogLayout(dialog, heading, help);
         ScrollView scroll = new ScrollView(this);
         LinearLayout content = column();
         scroll.addView(content);
@@ -2209,7 +2300,7 @@ public final class MainActivity extends Activity {
         return content;
     }
 
-    private LinearLayout dialogLayout(Dialog dialog, String heading) {
+    private LinearLayout dialogLayout(Dialog dialog, String heading, int... help) {
         LinearLayout layout = column(); layout.setPadding(dp(16), dp(12), dp(16), dp(12)); layout.setBackgroundColor(BG);
         LinearLayout bar = row();
         TextView label = text(heading, 24, INK);
@@ -2217,6 +2308,11 @@ public final class MainActivity extends Activity {
         label.setMinHeight(dp(56));
         label.setGravity(Gravity.CENTER_VERTICAL);
         bar.addView(label, new LinearLayout.LayoutParams(0, -2, 1));
+        if (help.length > 0) {
+            LinearLayout.LayoutParams helpParams = new LinearLayout.LayoutParams(dp(48), dp(48));
+            helpParams.setMarginStart(dp(8));
+            bar.addView(helpButton(heading, help), helpParams);
+        }
         layout.addView(bar);
         dialog.setContentView(layout);
         return layout;
@@ -2269,14 +2365,16 @@ public final class MainActivity extends Activity {
         view.setLayoutParams(params);
         return view;
     }
-    private LinearLayout card(LinearLayout parent, int heading) {
+    private LinearLayout card(LinearLayout parent, int heading, int... help) {
         LinearLayout panel = column(); panel.setPadding(dp(16), dp(16), dp(16), dp(16));
         panel.setBackground(rounded(PANEL, 24));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2); params.topMargin = dp(16); params.bottomMargin = dp(2);
         parent.addView(panel, params);
         if (heading != 0) {
             TextView label = text(getString(heading), 18, INK);
-            label.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL)); panel.addView(label);
+            label.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            label.setAccessibilityHeading(true);
+            panel.addView(help.length == 0 ? label : withHelp(label, getString(heading), help));
         }
         return panel;
     }
@@ -2286,7 +2384,7 @@ public final class MainActivity extends Activity {
         final Button toggle;
         private boolean populated;
 
-        OptionalSection(LinearLayout parent, int heading, boolean populated) {
+        OptionalSection(LinearLayout parent, int heading, boolean populated, int... help) {
             this.populated = populated;
             LinearLayout panel = card(parent, 0);
             toggle = button(heading, view -> setExpanded(content.getVisibility() != View.VISIBLE));
@@ -2298,7 +2396,8 @@ public final class MainActivity extends Activity {
             toggle.setBackground(buttonSurface(PANEL, 16));
             toggle.setStateListAnimator(null);
             toggle.setElevation(0);
-            panel.addView(toggle, new LinearLayout.LayoutParams(-1, -2));
+            panel.addView(help.length == 0 ? toggle : withHelp(toggle, getString(heading), help),
+                    new LinearLayout.LayoutParams(-1, -2));
             panel.addView(content, new LinearLayout.LayoutParams(-1, -2));
             setExpanded(populated);
         }
@@ -2347,6 +2446,7 @@ public final class MainActivity extends Activity {
         if (deleteDialog != null) deleteDialog.dismiss();
         if (progressDialog != null) progressDialog.dismiss();
         if (fileIconDialog != null) fileIconDialog.dismiss();
+        if (helpDialog != null) helpDialog.dismiss();
         if (settingsDialog != null) settingsDialog.dismiss();
         if (overlayDialog != null) overlayDialog.dismiss();
         if (backgroundDialog != null) backgroundDialog.dismiss();

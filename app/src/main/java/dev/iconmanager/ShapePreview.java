@@ -121,7 +121,22 @@ final class ShapePreview implements AutoCloseable {
 
     Bitmap render(IconShape shape, int[] corners, int overlayScale, boolean overlayClip,
                   int backgroundScale, boolean backgroundClip, Bitmap fileMask) {
-        Bitmap activeMask = fileMask == null ? shapeMask : fileMask;
+        return render(shape, corners, overlayScale, overlayClip, backgroundScale, backgroundClip, fileMask, 100);
+    }
+
+    Bitmap render(IconShape shape, int[] corners, int overlayScale, boolean overlayClip,
+                  int backgroundScale, boolean backgroundClip, Bitmap fileMask, int maskScale) {
+        Bitmap source = fileMask == null ? shapeMask : fileMask;
+        Bitmap scaledMask = shape == IconShape.FILE && source != null && maskScale != 100
+                ? IconMask.scaled(source, maskScale) : null;
+        try {
+            return renderScene(shape, corners, overlayScale, overlayClip, backgroundScale, backgroundClip,
+                    scaledMask == null ? source : scaledMask);
+        } finally { if (scaledMask != null) scaledMask.recycle(); }
+    }
+
+    private Bitmap renderScene(IconShape shape, int[] corners, int overlayScale, boolean overlayClip,
+                               int backgroundScale, boolean backgroundClip, Bitmap activeMask) {
         Bitmap result = Bitmap.createBitmap(WIDTH, HEIGHT, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(result);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);

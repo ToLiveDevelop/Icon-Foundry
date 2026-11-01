@@ -117,6 +117,14 @@
     <string name="mask_file_invalid">Выберите квадратный PNG-файл маски с видимыми пикселями.</string>
     <string name="mask_file_missing">Выберите PNG-маску перед применением формы.</string>
     <string name="mask_file_empty">PNG-маска полностью прозрачна.</string>
+    <string name="mask_scale">Масштаб маски: %1$d%%</string>
+    <string name="mask_scale_help" formatted="false">50–150% от PNG на холсте иконки 192 × 192, по центру. Меньшее значение уменьшает силуэт и оставляет поля вокруг, большее — увеличивает его; всё за пределами холста обрезается. Предпросмотр меняется сразу; для сохранения нажмите «Применить». Исходный файл не меняется.</string>
+    <string name="mask_scale_invalid">Масштаб маски должен быть от 50% до 150%.</string>
+    <string name="help">Справка</string>
+    <string name="help_about">Справка: %1$s</string>
+    <string name="close">Закрыть</string>
+    <string name="decrease">Уменьшить на 1</string>
+    <string name="increase">Увеличить на 1</string>
     <string name="corner_top_left">Левый верхний угол: %1$d%%</string>
     <string name="corner_top_right">Правый верхний угол: %1$d%%</string>
     <string name="corner_bottom_right">Правый нижний угол: %1$d%%</string>

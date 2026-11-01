@@ -31,6 +31,7 @@ final class Draft {
     IconShape shape = IconShape.ROUNDED_SQUARE;
     int[] corners = IconShape.DEFAULT_CORNERS.clone();
     String shapeFile = "";
+    int maskScale = 100;
     final Map<String, String> overrides = new LinkedHashMap<>();
 
     static Draft load(Context context) throws JSONException {
@@ -87,6 +88,11 @@ final class Draft {
         d.shapeFile = j.optString("shapeFile");
         if (d.shape == IconShape.FILE ? !FileIcons.isFile(d.shapeFile) : !d.shapeFile.isEmpty()) {
             throw new JSONException(App.text(R.string.mask_file_invalid));
+        }
+        d.maskScale = j.optInt("maskScale", 100);
+        if (d.maskScale < IconOverlay.MIN_SCALE || d.maskScale > IconOverlay.MAX_SCALE
+                || d.shape != IconShape.FILE && d.maskScale != 100) {
+            throw new JSONException(App.text(R.string.mask_scale_invalid));
         }
         JSONObject overrides = j.optJSONObject("overrides");
         if (overrides != null) {
@@ -171,6 +177,7 @@ final class Draft {
         if (shape == IconShape.FILE) {
             if (!FileIcons.isFile(shapeFile)) throw new JSONException(App.text(R.string.mask_file_invalid));
             j.put("shapeFile", shapeFile);
+            if (maskScale != 100) j.put("maskScale", maskScale);
         }
         return j;
     }

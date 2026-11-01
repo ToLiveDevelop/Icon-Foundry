@@ -692,6 +692,32 @@ public final class DeviceTests extends Instrumentation {
                     check(decor.findViewWithTag("shape-file").getVisibility() == android.view.View.VISIBLE
                                     && findText(decor, activity.getString(R.string.choose_shape_file)) != null,
                             "PNG mask tab explains and exposes file selection");
+                    android.widget.SeekBar maskScale = decor.findViewWithTag("mask-scale");
+                    check(maskScale != null && maskScale.isShown() && maskScale.getProgress() == 100,
+                            "PNG mask tab exposes the mask scale slider");
+                    decor.findViewWithTag("mask-scale-increase").performClick();
+                    check(maskScale.getProgress() == 101, "Right arrow increases mask scale by exactly one");
+                    decor.findViewWithTag("mask-scale-decrease").performClick();
+                    decor.findViewWithTag("mask-scale-decrease").performClick();
+                    check(maskScale.getProgress() == 99 && isolated.maskScale == 100,
+                            "Left arrow decreases mask scale by one without saving before Apply");
+                    maskScale.setProgress(50);
+                    decor.findViewWithTag("mask-scale-decrease").performClick();
+                    check(maskScale.getProgress() == 50, "Arrows stop at the minimum scale");
+                    android.view.View help = decor.findViewWithTag("help-shape_preview_help");
+                    check(help != null && help.getContentDescription().toString()
+                                    .contains(activity.getString(R.string.choose_shape)),
+                            "Shape popup header has a labelled help button");
+                    help.performClick();
+                    android.app.Dialog helpDialog = (android.app.Dialog) field(activity, "helpDialog");
+                    android.widget.TextView helpText = findText(helpDialog.getWindow().getDecorView(),
+                            activity.getString(R.string.shape_preview_help));
+                    check(helpDialog.isShowing() && helpText != null && helpText.getTextSize()
+                                    >= 16 * activity.getResources().getDisplayMetrics().scaledDensity - 1
+                                    && findText(decor, activity.getString(R.string.shape_preview_help)) == null,
+                            "Shape help opens in a readable popup instead of inline small text");
+                    findText(helpDialog.getWindow().getDecorView(), activity.getString(R.string.close)).performClick();
+                    check(!helpDialog.isShowing(), "Help popup closes");
                     fileTab = decor.findViewWithTag("shape-tab-presets");
                     fileTab.performClick();
                     for (IconShape shape : IconShape.values()) {
@@ -771,6 +797,22 @@ public final class DeviceTests extends Instrumentation {
                 android.view.View decor = dialog.getWindow().getDecorView();
                 check(((android.widget.SeekBar) decor.findViewWithTag("overlay-scale"))
                                 .getProgress() == 120, "Reopened popup restores applied overlay scale");
+                android.widget.ImageView stepScene = decor.findViewWithTag("shape-scene");
+                Bitmap beforeStep = ((android.graphics.drawable.BitmapDrawable) stepScene.getDrawable()).getBitmap()
+                        .copy(Bitmap.Config.ARGB_8888, false);
+                decor.findViewWithTag("overlay-scale-increase").performClick();
+                try {
+                    check(((android.widget.SeekBar) decor.findViewWithTag("overlay-scale")).getProgress() == 121
+                                    && !beforeStep.sameAs(((android.graphics.drawable.BitmapDrawable) stepScene.getDrawable()).getBitmap()),
+                            "Overlay scale arrow steps by one and refreshes the preview");
+                } finally { beforeStep.recycle(); }
+                decor.findViewWithTag("overlay-scale-decrease").performClick();
+                check(((android.widget.SeekBar) decor.findViewWithTag("overlay-scale")).getProgress() == 120,
+                        "Overlay scale left arrow steps back by one");
+                check(decor.findViewWithTag("help-overlay_scale_help") != null
+                                && decor.findViewWithTag("help-overlay_clip_help") != null
+                                && findText(decor, activity.getString(R.string.overlay_scale_help)) == null,
+                        "Overlay scale and clip explanations moved to help buttons");
                 android.widget.CheckBox clip = decor.findViewWithTag("overlay-clip");
                 check(clip != null && clip.isChecked(), "Overlay clip toggle is shown and enabled by default");
                 android.widget.ImageView scene = decor.findViewWithTag("shape-scene");
@@ -1140,12 +1182,14 @@ public final class DeviceTests extends Instrumentation {
                     bindSystem.invoke(activity, views[2], app);
                 });
                 waitForThumbnails(activity);
+                Bitmap mask = draftMask(activity, draft);
                 Bitmap[] expected = {source.render(iconName, 128), pack.render(fileReference, 128),
                         draft.shape.preview(IconRepository.unthemedIcon(activity.getPackageManager(), app.component()),
-                                pack.fallbackSize(), draft.corners)};
+                                pack.fallbackSize(), draft.corners, mask)};
                 Bitmap background = IconBackground.load(activity, draft.background, draft.backgroundScale);
                 Bitmap backdrop = background == null ? null : IconBackground.render(background, draft.shape,
-                        draft.corners, pack.fallbackSize(), draft.backgroundClip);
+                        draft.corners, pack.fallbackSize(), draft.backgroundClip, mask);
+                if (mask != null) mask.recycle();
                 try {
                     for (int i = 0; i < expected.length; i++) if (i == 2 || draft.backgroundAll) IconBackground.draw(expected[i], backdrop);
                     runOnMainChecked(() -> {
@@ -1171,7 +1215,10 @@ public final class DeviceTests extends Instrumentation {
             });
             waitForThumbnails(activity);
             Bitmap background = IconBackground.load(activity, draft.background, draft.backgroundScale);
-            Bitmap backdrop = IconBackground.render(background, draft.shape, draft.corners, pack.fallbackSize(), draft.backgroundClip);
+            Bitmap pickerMask = draftMask(activity, draft);
+            Bitmap backdrop = IconBackground.render(background, draft.shape, draft.corners, pack.fallbackSize(),
+                    draft.backgroundClip, pickerMask);
+            if (pickerMask != null) pickerMask.recycle();
             try {
                 runOnMainChecked(() -> {
                     Bitmap expected = choice[0].source().render(choice[0].icon().name(), 128);
@@ -1188,7 +1235,7 @@ public final class DeviceTests extends Instrumentation {
                 runOnMainChecked(() -> {
                     android.app.Dialog dialog = (android.app.Dialog) field(activity, "fileIconDialog");
                     android.view.ViewGroup content = (android.view.ViewGroup) dialog.findViewById(android.R.id.content);
-                    android.widget.ImageView image = (android.widget.ImageView) ((android.view.ViewGroup) content.getChildAt(0)).getChildAt(2);
+                    android.widget.ImageView image = (android.widget.ImageView) ((android.view.ViewGroup) content.getChildAt(0)).getChildAt(1);
                     Bitmap expected = file.copy(Bitmap.Config.ARGB_8888, true);
                     IconBackground.draw(expected, backdrop);
                     try { check(((android.graphics.drawable.BitmapDrawable) image.getDrawable()).getBitmap().sameAs(expected),
@@ -1202,6 +1249,11 @@ public final class DeviceTests extends Instrumentation {
                 finally { saved.recycle(); }
             } finally { background.recycle(); backdrop.recycle(); }
         } finally { file.recycle(); }
+    }
+
+    /** UI checks run against the user's draft, which may use an imported PNG mask. */
+    private static Bitmap draftMask(Context context, Draft draft) throws java.io.IOException {
+        return IconMask.load(context, draft.shape == IconShape.FILE ? draft.shapeFile : "", draft.maskScale);
     }
 
     private void verifyPreviewOverlays(MainActivity activity) throws Exception {
@@ -1253,13 +1305,14 @@ public final class DeviceTests extends Instrumentation {
                 waitForThumbnails(activity);
                 Bitmap overlay = IconOverlay.load(activity, overlayReference, scale);
                 IconRepository.Pack activePack = (IconRepository.Pack) field(activity, "pack");
+                Bitmap mask = draftMask(activity, draft);
                 Bitmap[] expected = {source.render(icon, 128), pack.render(fileReference, 128),
                         draft.shape.preview(IconRepository.unthemedIcon(activity.getPackageManager(), app.component()),
-                                activePack.fallbackSize(), draft.corners)};
+                                activePack.fallbackSize(), draft.corners, mask)};
                 try {
                     for (int i = 0; i < 2; i++) if (all) IconOverlay.draw(expected[i], overlay, clip);
                     if (overlay != null) {
-                        Bitmap border = IconOverlay.border(overlay, draft.shape, draft.corners, activePack.fallbackSize(), clip);
+                        Bitmap border = IconOverlay.border(overlay, draft.shape, draft.corners, activePack.fallbackSize(), clip, mask);
                         try { IconOverlay.draw(expected[2], border); } finally { border.recycle(); }
                     }
                     runOnMainChecked(() -> {
@@ -1273,6 +1326,7 @@ public final class DeviceTests extends Instrumentation {
                     });
                 } finally {
                     if (overlay != null) overlay.recycle();
+                    if (mask != null) mask.recycle();
                     for (Bitmap bitmap : expected) bitmap.recycle();
                     placeholder[0].recycle();
                 }
@@ -1323,7 +1377,7 @@ public final class DeviceTests extends Instrumentation {
             runOnMainChecked(() -> {
                 android.app.Dialog dialog = (android.app.Dialog) field(activity, "fileIconDialog");
                 android.view.ViewGroup content = (android.view.ViewGroup) dialog.findViewById(android.R.id.content);
-                android.widget.ImageView image = (android.widget.ImageView) ((android.view.ViewGroup) content.getChildAt(0)).getChildAt(2);
+                android.widget.ImageView image = (android.widget.ImageView) ((android.view.ViewGroup) content.getChildAt(0)).getChildAt(1);
                 Bitmap expected = withOverlay(activity, file.copy(Bitmap.Config.ARGB_8888, true), previousOverlay);
                 try { check(((android.graphics.drawable.BitmapDrawable) image.getDrawable()).getBitmap().sameAs(expected),
                         "File import preview applies the all-icons overlay"); }
@@ -2011,6 +2065,30 @@ public final class DeviceTests extends Instrumentation {
             settings.shapeFile = reference;
             check(Draft.fromJson(settings.toJson()).shapeFile.equals(reference),
                     "Template draft stores the selected mask reference");
+            check(!settings.toJson().has("maskScale"), "Default mask scale is omitted from template JSON");
+            settings.maskScale = 70;
+            check(Draft.fromJson(settings.toJson()).maskScale == 70 && settings.toJson().getInt("maskScale") == 70,
+                    "Template draft stores the mask scale");
+            org.json.JSONObject tooLarge = settings.toJson().put("maskScale", 151);
+            expectFailure(() -> Draft.fromJson(tooLarge), "Mask scale above 150% is rejected");
+            org.json.JSONObject withoutFile = new Draft().toJson().put("maskScale", 80);
+            expectFailure(() -> Draft.fromJson(withoutFile), "Mask scale without a PNG mask is rejected");
+            expectFailure(() -> IconMask.load(isolated, reference, 49), "Mask scale below 50% is rejected when loading");
+            Bitmap smaller = IconMask.load(isolated, reference, 70), larger = IconMask.load(isolated, reference, 150);
+            try {
+                check(android.graphics.Color.alpha(mask.getPixel(96, 14)) > 0
+                                && android.graphics.Color.alpha(smaller.getPixel(96, 14)) == 0
+                                && android.graphics.Color.alpha(smaller.getPixel(96, 96)) > 0,
+                        "Smaller mask scale shrinks the silhouette around the canvas centre");
+                check(android.graphics.Color.alpha(mask.getPixel(2, 96)) == 0
+                                && android.graphics.Color.alpha(larger.getPixel(2, 96)) > 0
+                                && larger.getWidth() == IconShape.SIZE,
+                        "Larger mask scale enlarges the silhouette and crops it to the icon canvas");
+                Bitmap scaledShape = IconShape.FILE.mask(pack.fallbackSize(), null, smaller);
+                try { check(!scaledShape.sameAs(IconShape.FILE.mask(pack.fallbackSize(), null, mask)),
+                        "Exported icon_mask.png follows the selected mask scale"); }
+                finally { scaledShape.recycle(); }
+            } finally { smaller.recycle(); larger.recycle(); }
             TemplateStore store = new TemplateStore(isolated);
             TemplateStore.Entry saved = store.save(settings, "Mask test", true);
             File stored = new File(FileIcons.directory(isolated),
@@ -2019,7 +2097,7 @@ public final class DeviceTests extends Instrumentation {
             Draft restored = store.open(saved.id());
             Bitmap restoredMask = IconMask.load(isolated, restored.shapeFile);
             try {
-                check(restored.shape == IconShape.FILE && restoredMask.sameAs(mask),
+                check(restored.shape == IconShape.FILE && restoredMask.sameAs(mask) && restored.maskScale == 70,
                         "Template embeds and restores the custom mask image");
             } finally { restoredMask.recycle(); }
             IconRepository.App app = new IconRepository.App(
@@ -3201,8 +3279,9 @@ public final class DeviceTests extends Instrumentation {
                 check(combined.packageNames().equals(draft.packs), "Editor uses the combined pack in list order");
                 check(((android.view.ViewGroup) list.getChildAt(0)).getChildAt(0).getVisibility() == android.view.View.VISIBLE,
                         "Drag handles appear for several packs");
-                check(((android.widget.TextView) field(activity, "packInfo")).getText().toString()
-                        .equals(activity.getString(R.string.pack_priority_help)), "Priority rule is explained");
+                check(((android.widget.TextView) field(activity, "packInfo")).getVisibility() == android.view.View.GONE
+                                && activity.getWindow().getDecorView().findViewWithTag("help-pack_priority_help") != null,
+                        "Priority rule is available from the pack help button");
                 activity.selectPack(other);
                 check(draft.packs.size() == n + 1, "The same pack cannot be added twice");
                 IconRepository.App app = new IconRepository.App(new ComponentName("dev.app.second", "dev.app.second.Main"), "Second");
@@ -3325,13 +3404,28 @@ public final class DeviceTests extends Instrumentation {
                 check(titleLabel != null && titleLabel != title && titleLabel.getLabelFor() == title.getId(),
                         "Theme title retains a permanent associated label when filled");
                 android.widget.LinearLayout identity = (android.widget.LinearLayout) title.getParent();
-                check(identity.getChildCount() == 3 && identity.getChildAt(2) instanceof android.widget.TextView
-                                && activity.getString(R.string.filename_help)
-                                        .contentEquals(((android.widget.TextView) identity.getChildAt(2)).getText()),
-                        "Filename input replaced by concise automatic naming hint");
+                check(identity.getChildCount() == 2 && identity.findViewWithTag("help-filename_help") != null
+                                && findText(identity, activity.getString(R.string.filename_help)) == null,
+                        "Automatic naming explanation moved to the title help button");
                 android.widget.LinearLayout body = (android.widget.LinearLayout) title.getParent().getParent();
-                check(findText(body.getChildAt(2), activity.getString(R.string.add_pack)) != null,
+                check(findText(body.getChildAt(1), activity.getString(R.string.add_pack)) != null,
                         "Pack selection is the first form card");
+                int[] helps = {R.string.intro, R.string.pack_priority_help, R.string.filename_help, R.string.wallpaper_help,
+                        R.string.background_help, R.string.overlay_help, R.string.scope_help, R.string.fallback_shape_help,
+                        R.string.folder_background_help, R.string.apps_help, R.string.destination_help};
+                for (int help : helps) {
+                    android.view.View button = body.findViewWithTag("help-" + activity.getResources().getResourceEntryName(help));
+                    check(button != null && button.isShown() && button.getWidth() >= 48 * density - 1
+                                    && findText(body, activity.getString(help)) == null,
+                            "Editor block has its own help button instead of small inline text: "
+                                    + activity.getResources().getResourceEntryName(help));
+                }
+                body.findViewWithTag("help-scope_help").performClick();
+                android.app.Dialog helpDialog = (android.app.Dialog) field(activity, "helpDialog");
+                check(helpDialog != null && helpDialog.isShowing()
+                                && findText(helpDialog.getWindow().getDecorView(), activity.getString(R.string.scope_help)) != null,
+                        "Editor help button opens its explanation");
+                helpDialog.dismiss();
             } finally { title.setText(savedTitle); }
         });
     }

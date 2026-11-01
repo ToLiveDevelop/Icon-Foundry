@@ -117,6 +117,14 @@
     <string name="mask_file_invalid">Choose a square PNG mask with visible pixels.</string>
     <string name="mask_file_missing">Choose a PNG mask before applying this shape.</string>
     <string name="mask_file_empty">The PNG mask is fully transparent.</string>
+    <string name="mask_scale">Mask scale: %1$d%%</string>
+    <string name="mask_scale_help" formatted="false">50–150% of the PNG on the 192 × 192 icon canvas, centred. Lower values shrink the silhouette and leave more space around it; higher values enlarge it, and anything beyond the canvas is cut off. The preview updates at once; press Apply to save. The source file is not changed.</string>
+    <string name="mask_scale_invalid">Mask scale must be between 50% and 150%.</string>
+    <string name="help">Help</string>
+    <string name="help_about">Help: %1$s</string>
+    <string name="close">Close</string>
+    <string name="decrease">Decrease by 1</string>
+    <string name="increase">Increase by 1</string>
     <string name="corner_top_left">Top-left corner: %1$d%%</string>
     <string name="corner_top_right">Top-right corner: %1$d%%</string>
     <string name="corner_bottom_right">Bottom-right corner: %1$d%%</string>
