@@ -96,12 +96,21 @@ final class IconOverlay {
 
     /** Returns the native icon_border bitmap, optionally clipped to the fallback mask silhouette. */
     static Bitmap border(Bitmap overlay, IconShape shape, int[] corners, int maskSize, boolean clip) {
+        return border(overlay, shape, corners, maskSize, clip, null);
+    }
+
+    static Bitmap border(Bitmap overlay, IconShape shape, int[] corners, int maskSize, boolean clip, Bitmap fileMask) {
         Bitmap result = overlay.copy(Bitmap.Config.ARGB_8888, true);
         if (!clip || shape == IconShape.NONE) return result;
-        Bitmap mask = shape.mask(maskSize, corners);
-        try { applyAlpha(result, mask); }
-        finally { mask.recycle(); }
-        return result;
+        try {
+            Bitmap mask = shape.mask(maskSize, corners, fileMask);
+            try { applyAlpha(result, mask); }
+            finally { mask.recycle(); }
+            return result;
+        } catch (RuntimeException error) {
+            result.recycle();
+            throw error;
+        }
     }
 
     static void draw(Bitmap icon, Bitmap overlay) {

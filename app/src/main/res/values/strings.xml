@@ -91,7 +91,7 @@
     <string name="fallback_shape">Shape for icons without replacements</string>
     <string name="folder_background">Remove grey stacked-folder background</string>
     <string name="folder_background_help">Apply the full theme, not just icons, to remove the stacked-folder background. Without your own wallpaper, HONOR may set a fallback. Also removes the unknown-shortcut background in night mode.</string>
-    <string name="fallback_shape_help">The icon_mask.png mask clips system icons without replacements, including future apps. Its size matches the typical visible pack icon, excluding transparent padding and shadows. Pack icons are unchanged; No mask keeps their original shape.</string>
+    <string name="fallback_shape_help">The icon_mask.png mask clips system icons without replacements, including future apps. Choose a preset, edit corner radii, or load a square PNG whose alpha channel defines the silhouette. Its size matches the typical visible pack icon. Pack icons are unchanged; No mask keeps their original shape.</string>
     <string name="shape_none">No mask</string>
     <string name="shape_circle">Circle</string>
     <string name="shape_rounded_square">Rounded square</string>
@@ -105,8 +105,18 @@
     <string name="shape_custom">Custom shape</string>
     <string name="shape_tab_presets">Presets</string>
     <string name="shape_tab_editor">Editor</string>
+    <string name="shape_tab_file">From file</string>
     <string name="shape_editor">Shape editor</string>
     <string name="shape_editor_help" formatted="false">Rounding of each corner: 0% is a sharp corner, 100% is half the side. 100% on all corners makes a circle.</string>
+    <string name="shape_file">PNG mask</string>
+    <string name="shape_file_title">Mask from PNG</string>
+    <string name="shape_file_help">Choose a square PNG. Its alpha channel defines the silhouette: opaque areas keep the icon; transparent areas cut it away. The image is resized to the icon canvas. A transparent background around the shape is recommended.</string>
+    <string name="shape_file_none">No mask selected</string>
+    <string name="shape_file_selected">PNG mask selected</string>
+    <string name="choose_shape_file">Choose mask PNG</string>
+    <string name="mask_file_invalid">Choose a square PNG mask with visible pixels.</string>
+    <string name="mask_file_missing">Choose a PNG mask before applying this shape.</string>
+    <string name="mask_file_empty">The PNG mask is fully transparent.</string>
     <string name="corner_top_left">Top-left corner: %1$d%%</string>
     <string name="corner_top_right">Top-right corner: %1$d%%</string>
     <string name="corner_bottom_right">Bottom-right corner: %1$d%%</string>
@@ -117,7 +127,7 @@
     <string name="overlay_clipped_empty">Nothing of the overlay remains after scaling and clipping.</string>
     <string name="choose_shape">Choose shape</string>
     <string name="current_shape">Choose shape · %1$s</string>
-    <string name="shape_preview_help">System icons without pack replacements, in alphabetical order. If fewer than six are available, other apps are added. The shape and overlay affect only this preview until you tap Apply.</string>
+    <string name="shape_preview_help">System icons without pack replacements, in alphabetical order. If fewer than six are available, other apps are added. The shape, overlay and background affect only this preview until you tap Apply.</string>
     <string name="shape_preview_wallpaper">Background: template wallpaper</string>
     <string name="shape_preview_gradient">Background: preview gradient, not included in the theme</string>
     <string name="shape_no_apps">No installed applications are available for the preview.</string>

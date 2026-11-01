@@ -21,7 +21,8 @@ enum IconShape {
     STAR(R.string.shape_star),
     HEXAGON(R.string.shape_hexagon),
     PENTAGON(R.string.shape_pentagon),
-    CUSTOM(R.string.shape_custom);
+    CUSTOM(R.string.shape_custom),
+    FILE(R.string.shape_file);
 
     final int label;
     static final int SIZE = 192;
@@ -57,39 +58,52 @@ enum IconShape {
     Bitmap preview(Drawable drawable, int visibleSize) { return preview(drawable, visibleSize, null); }
 
     Bitmap preview(Drawable drawable, int visibleSize, int[] corners) {
+        return preview(drawable, visibleSize, corners, null);
+    }
+
+    Bitmap preview(Drawable drawable, int visibleSize, int[] corners, Bitmap fileMask) {
         Bitmap source = previewSource(drawable, this != NONE);
-        try { return preview(source, visibleSize, corners); }
+        try { return preview(source, visibleSize, corners, fileMask); }
         finally { source.recycle(); }
     }
 
     Bitmap preview(Bitmap source, int visibleSize) { return preview(source, visibleSize, null); }
 
     Bitmap preview(Bitmap source, int visibleSize, int[] corners) {
+        return preview(source, visibleSize, corners, null);
+    }
+
+    Bitmap preview(Bitmap source, int visibleSize, int[] corners, Bitmap fileMask) {
         Bitmap result = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888);
-        Canvas canvas = new Canvas(result);
-        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
-        int left = source.getWidth(), top = source.getHeight(), right = -1, bottom = -1;
-        for (int y = 0; y < source.getHeight(); y++) for (int x = 0; x < source.getWidth(); x++) {
-            if (Color.alpha(source.getPixel(x, y)) > 0) {
-                left = Math.min(left, x); top = Math.min(top, y);
-                right = Math.max(right, x); bottom = Math.max(bottom, y);
+        try {
+            Canvas canvas = new Canvas(result);
+            Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+            int left = source.getWidth(), top = source.getHeight(), right = -1, bottom = -1;
+            for (int y = 0; y < source.getHeight(); y++) for (int x = 0; x < source.getWidth(); x++) {
+                if (Color.alpha(source.getPixel(x, y)) > 0) {
+                    left = Math.min(left, x); top = Math.min(top, y);
+                    right = Math.max(right, x); bottom = Math.max(bottom, y);
+                }
             }
+            Rect content = right < left ? new Rect(0, 0, source.getWidth(), source.getHeight())
+                    : new Rect(left, top, right + 1, bottom + 1);
+            int extent = Math.min(content.width(), content.height());
+            int cx = content.centerX(), cy = content.centerY();
+            Rect crop = this == NONE ? new Rect(0, 0, source.getWidth(), source.getHeight())
+                    : new Rect(cx - extent / 2, cy - extent / 2, cx - extent / 2 + extent, cy - extent / 2 + extent);
+            canvas.drawBitmap(source, crop, new Rect(0, 0, SIZE, SIZE), paint);
+            if (this != NONE) {
+                Bitmap mask = mask(visibleSize, corners, fileMask);
+                try {
+                    paint.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN));
+                    canvas.drawBitmap(mask, 0, 0, paint);
+                } finally { mask.recycle(); }
+            }
+            return result;
+        } catch (RuntimeException error) {
+            result.recycle();
+            throw error;
         }
-        Rect content = right < left ? new Rect(0, 0, source.getWidth(), source.getHeight())
-                : new Rect(left, top, right + 1, bottom + 1);
-        int extent = Math.min(content.width(), content.height());
-        int cx = content.centerX(), cy = content.centerY();
-        Rect crop = this == NONE ? new Rect(0, 0, source.getWidth(), source.getHeight())
-                : new Rect(cx - extent / 2, cy - extent / 2, cx - extent / 2 + extent, cy - extent / 2 + extent);
-        canvas.drawBitmap(source, crop, new Rect(0, 0, SIZE, SIZE), paint);
-        if (this != NONE) {
-            Bitmap mask = mask(visibleSize, corners);
-            try {
-                paint.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN));
-                canvas.drawBitmap(mask, 0, 0, paint);
-            } finally { mask.recycle(); }
-        }
-        return result;
     }
 
     Bitmap mask() { return mask(SIZE - 2 * INSET); }
@@ -106,8 +120,13 @@ enum IconShape {
 
     /** Corners are used only by {@link #CUSTOM}; null means the editor defaults. */
     Bitmap mask(int visibleSize, int[] corners) {
+        return mask(visibleSize, corners, null);
+    }
+
+    Bitmap mask(int visibleSize, int[] corners, Bitmap fileMask) {
         if (visibleSize < 1 || visibleSize > SIZE) throw new IllegalArgumentException(App.text(R.string.shape_size_invalid));
         if (this == NONE) throw new IllegalStateException(App.text(R.string.shape_not_selected));
+        if (this == FILE) return IconMask.render(fileMask, visibleSize);
         Path path = new Path();
         switch (this) {
             case CIRCLE -> path.addCircle(.5f, .5f, .5f, Path.Direction.CW);

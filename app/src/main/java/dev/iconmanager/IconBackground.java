@@ -36,7 +36,11 @@ final class IconBackground {
     }
 
     static Bitmap render(Bitmap background, IconShape shape, int[] corners, int visibleSize, boolean clip) {
-        return IconOverlay.border(background, shape, corners, visibleSize, clip);
+        return render(background, shape, corners, visibleSize, clip, null);
+    }
+
+    static Bitmap render(Bitmap background, IconShape shape, int[] corners, int visibleSize, boolean clip, Bitmap fileMask) {
+        return IconOverlay.border(background, shape, corners, visibleSize, clip, fileMask);
     }
 
     static void draw(Bitmap icon, Bitmap background) {

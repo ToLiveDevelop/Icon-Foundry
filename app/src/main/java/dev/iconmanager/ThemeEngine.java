@@ -454,24 +454,35 @@ final class ThemeEngine {
                        Map<String, String> overrides, Bitmap cover, File wallpaper, Bitmap overlay, boolean overlayAll,
                        boolean overlayClip, Bitmap background, boolean backgroundAll, boolean backgroundClip,
                        Progress progress) throws Exception {
+        return build(context, title, fullPack, shape, corners, clearFolderBackground, pack, apps, overrides,
+                cover, wallpaper, overlay, overlayAll, overlayClip, background, backgroundAll, backgroundClip,
+                null, progress);
+    }
+
+    static Built build(Context context, String title, boolean fullPack, IconShape shape, int[] corners,
+                       boolean clearFolderBackground, IconRepository.Pack pack, List<IconRepository.App> apps,
+                       Map<String, String> overrides, Bitmap cover, File wallpaper, Bitmap overlay, boolean overlayAll,
+                       boolean overlayClip, Bitmap background, boolean backgroundAll, boolean backgroundClip,
+                       Bitmap shapeMask, Progress progress) throws Exception {
+        if (shape == IconShape.FILE && shapeMask == null) throw new IOException(App.text(R.string.mask_file_missing));
         if (overlay != null) IconOverlay.validateRendered(overlay);
         if (background != null) IconBackground.validate(background);
         Map<String, String> targets = exportTargets(apps, pack, overrides, fullPack);
         int count = exportCount(apps, pack, overrides, fullPack);
         if (count == 0) throw new IOException(context.getString(R.string.empty_export));
         int maskSize = shape == IconShape.NONE ? IconShape.SIZE - 2 * IconShape.INSET : pack.fallbackSize();
-        Bitmap border = overlay == null ? null : IconOverlay.border(overlay, shape, corners, maskSize, overlayClip);
+        Bitmap border = overlay == null ? null : IconOverlay.border(overlay, shape, corners, maskSize, overlayClip, shapeMask);
         Bitmap backdrop = null;
         try {
             if (border != null) IconOverlay.validateRendered(border);
             if (background != null) {
-                backdrop = IconBackground.render(background, shape, corners, maskSize, backgroundClip);
+                backdrop = IconBackground.render(background, shape, corners, maskSize, backgroundClip, shapeMask);
                 IconBackground.validate(backdrop);
                 // HONOR's legacy background loader requires a border, even when it is invisible.
                 if (border == null) border = Bitmap.createBitmap(IconShape.SIZE, IconShape.SIZE, Bitmap.Config.ARGB_8888);
             }
             return build(context, title, shape, corners, clearFolderBackground, pack, cover,
-                    wallpaper, overlay, border, overlayAll, overlayClip, backdrop, backgroundAll,
+                    wallpaper, overlay, border, overlayAll, overlayClip, backdrop, backgroundAll, shapeMask,
                     targets, count, maskSize, progress);
         } finally {
             if (border != null) border.recycle();
@@ -483,6 +494,7 @@ final class ThemeEngine {
                                boolean clearFolderBackground, IconRepository.Pack pack,
                                Bitmap cover, File wallpaper, Bitmap overlay, Bitmap border, boolean overlayAll,
                                boolean overlayClip, Bitmap background, boolean backgroundAll,
+                               Bitmap shapeMask,
                                Map<String, String> targets, int count, int maskSize,
                                Progress progress) throws Exception {
         byte[] wallpaperBytes = wallpaper == null ? null : java.nio.file.Files.readAllBytes(wallpaper.toPath());
@@ -505,7 +517,7 @@ final class ThemeEngine {
                     progress.update(++done, targets.size());
                 }
                 if (shape != IconShape.NONE) {
-                    Bitmap mask = shape.mask(maskSize, corners);
+                    Bitmap mask = shape.mask(maskSize, corners, shapeMask);
                     try { put(zip, "icon_mask.png", png(mask)); }
                     finally { mask.recycle(); }
                 }
@@ -536,7 +548,7 @@ final class ThemeEngine {
                 } finally { if (small != cover) small.recycle(); }
             }
             verifyArchive(result, targets.size(), shape, corners, clearFolderBackground, maskSize,
-                    wallpaper != null, border, background);
+                    wallpaper != null, border, background, shapeMask);
             complete = true;
             return new Built(result, count);
         } finally {
@@ -584,12 +596,24 @@ final class ThemeEngine {
                          List<IconRepository.App> apps, Map<String, String> overrides, Bitmap cover, Uri tree,
                          Uri replace, File wallpaper, Bitmap overlay, boolean overlayAll, boolean overlayClip,
                          Bitmap background, boolean backgroundAll, boolean backgroundClip, Progress progress) throws Exception {
+        return export(context, title, filename, fullPack, shape, corners, clearFolderBackground, pack, apps,
+                overrides, cover, tree, replace, wallpaper, overlay, overlayAll, overlayClip,
+                background, backgroundAll, backgroundClip, null, progress);
+    }
+
+    static Result export(Context context, String title, String filename, boolean fullPack, IconShape shape,
+                         int[] corners, boolean clearFolderBackground, IconRepository.Pack pack,
+                         List<IconRepository.App> apps, Map<String, String> overrides, Bitmap cover, Uri tree,
+                         Uri replace, File wallpaper, Bitmap overlay, boolean overlayAll, boolean overlayClip,
+                         Bitmap background, boolean backgroundAll, boolean backgroundClip, Bitmap shapeMask,
+                         Progress progress) throws Exception {
         validateTree(context, tree);
         ContentResolver resolver = context.getContentResolver();
         Uri existing = findDocument(resolver, tree, filename);
         if (existing != null && !existing.equals(replace)) throw new IOException(context.getString(R.string.file_exists));
         Built built = build(context, title, fullPack, shape, corners, clearFolderBackground, pack, apps, overrides,
-                cover, wallpaper, overlay, overlayAll, overlayClip, background, backgroundAll, backgroundClip, progress);
+                cover, wallpaper, overlay, overlayAll, overlayClip, background, backgroundAll, backgroundClip,
+                shapeMask, progress);
         File result = built.file();
         Uri created = null;
         try {
@@ -876,6 +900,12 @@ final class ThemeEngine {
 
     static void verifyArchive(File file, int targetCount, IconShape shape, int[] corners, boolean clearFolderBackground,
                               int maskSize, boolean wallpaper, Bitmap overlay, Bitmap background) throws IOException {
+        verifyArchive(file, targetCount, shape, corners, clearFolderBackground, maskSize, wallpaper, overlay, background, null);
+    }
+
+    static void verifyArchive(File file, int targetCount, IconShape shape, int[] corners, boolean clearFolderBackground,
+                              int maskSize, boolean wallpaper, Bitmap overlay, Bitmap background, Bitmap shapeMask) throws IOException {
+        if (shape == IconShape.FILE && shapeMask == null) throw new IOException(App.text(R.string.mask_file_missing));
         try (ZipFile zip = new ZipFile(file)) {
             if (zip.size() != (clearFolderBackground ? 7 : 6) + (wallpaper ? 3 : 0)
                     || zip.getEntry("description.xml") == null || zip.getEntry("icons") == null
@@ -953,7 +983,7 @@ final class ThemeEngine {
                             if (mask.getWidth() != IconShape.SIZE || mask.getHeight() != IconShape.SIZE) {
                                 throw new IOException(App.text(R.string.mask_size_error));
                             }
-                            Bitmap expected = shape.mask(maskSize, corners);
+                            Bitmap expected = shape.mask(maskSize, corners, shapeMask);
                             try {
                                 if (!mask.sameAs(expected)) throw new IOException(App.text(R.string.mask_shape_error));
                             } finally { expected.recycle(); }

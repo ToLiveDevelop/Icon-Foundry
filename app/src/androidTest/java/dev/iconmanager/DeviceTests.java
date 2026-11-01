@@ -78,6 +78,7 @@ public final class DeviceTests extends Instrumentation {
         previewSource.eraseColor(android.graphics.Color.RED);
         try {
             for (IconShape shape : IconShape.values()) {
+                if (shape == IconShape.FILE) continue;
                 Bitmap preview = shape.preview(previewSource);
                 try {
                     check(preview.getPixel(96, 96) == android.graphics.Color.RED,
@@ -106,6 +107,7 @@ public final class DeviceTests extends Instrumentation {
         }
         IconRepository.Pack pack = repository.load(packName);
         verifyShapeExamples(context, pack);
+        verifyFileMask(context, pack);
         verifySettingsResources(context);
         verifyOverlay(context, pack);
         verifyBackground(context, pack);
@@ -609,6 +611,7 @@ public final class DeviceTests extends Instrumentation {
         for (IconShape shape : IconShape.values()) {
             Draft draft = new Draft();
             draft.shape = shape;
+            if (shape == IconShape.FILE) draft.shapeFile = "fileicon:i" + "0".repeat(64);
             check(Draft.fromJson(draft.toJson()).shape == shape, "Every shape retains its stable template identifier");
         }
         Draft custom = new Draft();
@@ -650,6 +653,7 @@ public final class DeviceTests extends Instrumentation {
         isolated.overlayScale = 100;
         isolated.overlayClip = true;
         isolated.background = "";
+        isolated.shapeFile = "";
         String savedJson = activity.getSharedPreferences("draft", 0).getString("json", "");
         var build = MainActivity.class.getDeclaredMethod("buildScreen");
         build.setAccessible(true);
@@ -682,8 +686,16 @@ public final class DeviceTests extends Instrumentation {
                     check(decor.findViewWithTag("shape-editor").getVisibility() != android.view.View.VISIBLE
                                     && decor.findViewWithTag("shape-tab-presets").isSelected(),
                             "Preset shapes tab opens first for a preset shape");
+                    android.view.View fileTab = decor.findViewWithTag("shape-tab-file");
+                    check(fileTab != null, "Shape popup offers a PNG mask tab");
+                    fileTab.performClick();
+                    check(decor.findViewWithTag("shape-file").getVisibility() == android.view.View.VISIBLE
+                                    && findText(decor, activity.getString(R.string.choose_shape_file)) != null,
+                            "PNG mask tab explains and exposes file selection");
+                    fileTab = decor.findViewWithTag("shape-tab-presets");
+                    fileTab.performClick();
                     for (IconShape shape : IconShape.values()) {
-                        if (shape == IconShape.CUSTOM) continue;
+                        if (shape == IconShape.CUSTOM || shape == IconShape.FILE) continue;
                         android.view.View tile = decor.findViewWithTag(shape);
                         check(tile != null && tile.getContentDescription().equals(activity.getString(shape.label)),
                                 "Each exported shape has a labelled illustration tile");
@@ -1956,11 +1968,124 @@ public final class DeviceTests extends Instrumentation {
         }
     }
 
+    private void verifyFileMask(Context context, IconRepository.Pack pack) throws Exception {
+        File directory = new File(context.getCacheDir(), "icon-mask-check");
+        Files.createDirectories(directory.toPath());
+        Context isolated = new android.content.ContextWrapper(context) {
+            @Override public File getFilesDir() { return directory; }
+        };
+        Bitmap source = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+        android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        paint.setColor(android.graphics.Color.WHITE);
+        android.graphics.Canvas canvas = new android.graphics.Canvas(source);
+        canvas.drawCircle(96, 96, 86, paint);
+        canvas.drawRect(25, 74, 167, 118, paint);
+        File input = new File(directory, "mask.png");
+        Bitmap mask = null, previewSource = null, preview = null, generated = null;
+        ThemeEngine.Built built = null;
+        try {
+            try (FileOutputStream stream = new FileOutputStream(input)) {
+                check(source.compress(Bitmap.CompressFormat.PNG, 100, stream), "Custom PNG mask fixture encoded");
+            }
+            mask = IconMask.read(isolated, Uri.fromFile(input));
+            check(mask.getWidth() == IconShape.SIZE && mask.getHeight() == IconShape.SIZE,
+                    "Imported custom mask is normalized to the icon canvas");
+            String reference = FileIcons.save(isolated, mask);
+            generated = IconShape.FILE.mask(pack.fallbackSize(), null, mask);
+            int inset = (192 - pack.fallbackSize()) / 2;
+            check((generated.getPixel(96, 96) & 0x00ffffff) == 0
+                            && android.graphics.Color.alpha(generated.getPixel(96, 96)) == 255
+                            && android.graphics.Color.alpha(generated.getPixel(8, 8)) == 0
+                            && android.graphics.Color.alpha(generated.getPixel(96, inset + 20)) > 0,
+                    "File mask preserves its alpha silhouette and pack-sized padding");
+            previewSource = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+            previewSource.eraseColor(android.graphics.Color.RED);
+            preview = IconShape.FILE.preview(previewSource, pack.fallbackSize(), null, mask);
+            check(preview.getPixel(96, 96) == android.graphics.Color.RED
+                            && android.graphics.Color.alpha(preview.getPixel(8, 8)) == 0,
+                    "Selected file mask clips icon previews using its alpha channel");
+            expectFailure(() -> IconShape.FILE.mask(pack.fallbackSize(), null),
+                    "File mask shape cannot be generated without its source PNG");
+            Draft settings = new Draft();
+            settings.shape = IconShape.FILE;
+            settings.shapeFile = reference;
+            check(Draft.fromJson(settings.toJson()).shapeFile.equals(reference),
+                    "Template draft stores the selected mask reference");
+            TemplateStore store = new TemplateStore(isolated);
+            TemplateStore.Entry saved = store.save(settings, "Mask test", true);
+            File stored = new File(FileIcons.directory(isolated),
+                    reference.substring("fileicon:".length()) + ".png");
+            Files.delete(stored.toPath());
+            Draft restored = store.open(saved.id());
+            Bitmap restoredMask = IconMask.load(isolated, restored.shapeFile);
+            try {
+                check(restored.shape == IconShape.FILE && restoredMask.sameAs(mask),
+                        "Template embeds and restores the custom mask image");
+            } finally { restoredMask.recycle(); }
+            IconRepository.App app = new IconRepository.App(
+                    new ComponentName("dev.test.custommask", "dev.test.custommask.Main"), "Custom mask");
+            String icon = pack.icons.keySet().iterator().next();
+            Bitmap cover = ThemeEngine.cover(pack, List.of(app), Map.of(app.key(), icon));
+            try {
+                built = ThemeEngine.build(context, "Custom file mask", false, IconShape.FILE, null, false,
+                        pack, List.of(app), Map.of(app.key(), icon), cover, null, null, false, true,
+                        null, false, true, mask, (done, total) -> {});
+            } finally { cover.recycle(); }
+            ThemeEngine.verifyArchive(built.file(), 1, IconShape.FILE, null, false, pack.fallbackSize(),
+                    false, null, null, mask);
+            try (ZipFile archive = new ZipFile(built.file());
+                 ZipInputStream icons = new ZipInputStream(archive.getInputStream(archive.getEntry("icons")))) {
+                boolean found = false;
+                for (ZipEntry entry; (entry = icons.getNextEntry()) != null;) {
+                    if (!entry.getName().equals("icon_mask.png")) continue;
+                    byte[] bytes = icons.readAllBytes();
+                    Bitmap actual = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                    try { check(actual.sameAs(generated), "Exported icon_mask.png matches the selected file silhouette"); }
+                    finally { actual.recycle(); }
+                    found = true;
+                }
+                check(found, "Custom mask export includes the native HONOR icon_mask.png asset");
+            }
+            Bitmap missingMaskCover = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
+            try {
+                expectFailure(() -> ThemeEngine.build(context, "Missing custom mask", false, IconShape.FILE, null, false,
+                        pack, List.of(app), Map.of(app.key(), icon), missingMaskCover, null, null, false, true,
+                        null, false, true, (done, total) -> {}),
+                        "Export refuses a file mask when its source image is missing");
+            } finally { missingMaskCover.recycle(); }
+            Bitmap empty = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+            try { expectFailure(() -> IconMask.validate(empty), "Fully transparent mask files are rejected"); }
+            finally { empty.recycle(); }
+            Bitmap rectangle = Bitmap.createBitmap(192, 96, Bitmap.Config.ARGB_8888);
+            File nonSquare = new File(directory, "nonsquare.png");
+            try (FileOutputStream stream = new FileOutputStream(nonSquare)) {
+                rectangle.eraseColor(android.graphics.Color.WHITE);
+                rectangle.compress(Bitmap.CompressFormat.PNG, 100, stream);
+            }
+            try { expectFailure(() -> IconMask.read(isolated, Uri.fromFile(nonSquare)), "Non-square mask PNG is rejected"); }
+            finally { rectangle.recycle(); }
+        } finally {
+            source.recycle();
+            if (mask != null) mask.recycle();
+            if (previewSource != null) previewSource.recycle();
+            if (preview != null) preview.recycle();
+            if (generated != null) generated.recycle();
+            if (built != null) Files.deleteIfExists(built.file().toPath());
+            File[] files = FileIcons.directory(isolated).listFiles();
+            if (files != null) for (File file : files) Files.deleteIfExists(file.toPath());
+            Files.deleteIfExists(FileIcons.directory(isolated).toPath());
+            File[] artifacts = directory.listFiles();
+            if (artifacts != null) for (File file : artifacts) Files.deleteIfExists(file.toPath());
+            Files.deleteIfExists(directory.toPath());
+        }
+    }
+
     private void verifyShapes(Context context, IconRepository.Pack pack, IconRepository.App app, String icon) throws Exception {
         List<int[]> silhouettes = new ArrayList<>();
         Bitmap cover = ThemeEngine.cover(pack, List.of(app), Map.of(app.key(), icon));
         try {
             for (IconShape shape : IconShape.values()) {
+                if (shape == IconShape.FILE) continue;
                 boolean clearFolderBackground = shape.ordinal() % 2 == 0;
                 ThemeEngine.Built built = ThemeEngine.build(context, "Shape check", false, shape, clearFolderBackground, pack,
                         List.of(app), Map.of(app.key(), icon), cover, (done, total) -> {});
@@ -2044,8 +2169,23 @@ public final class DeviceTests extends Instrumentation {
         withSystem.systemIcons = true;
         check(Draft.fromJson(withSystem.toJson()).systemIcons, "System icon preview choice is stored in template");
         check(Draft.load(testContext).clearFolderBackground, "Old drafts enable agreed folder background fix by default");
-        android.app.Activity activity = startActivitySync(new android.content.Intent(context, MainActivity.class)
-                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK));
+        android.content.SharedPreferences appDraft = context.getSharedPreferences("draft", 0);
+        Map<String, ?> savedDraft = appDraft.getAll();
+        Object savedJson = savedDraft.get("json");
+        org.json.JSONObject isolatedDraft = new org.json.JSONObject()
+                .put("tree", new org.json.JSONObject(savedJson instanceof String ? (String) savedJson : "{}")
+                        .optString("tree", ""));
+        if (!appDraft.edit().clear().putString("json", isolatedDraft.toString()).commit()) {
+            throw new java.io.IOException("Could not isolate the device UI test draft");
+        }
+        android.app.Activity activity;
+        try {
+            activity = startActivitySync(new android.content.Intent(context, MainActivity.class)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK));
+        } catch (RuntimeException | Error error) {
+            restorePreferences(appDraft, savedDraft);
+            throw error;
+        }
         try {
             runOnMainSync(() -> activity.getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON));
             waitForWork(activity);
@@ -2134,7 +2274,17 @@ public final class DeviceTests extends Instrumentation {
                 check(!(boolean) field(activity, "busy"), "Pack discovery finishes before picker is used");
             });
             verifyOperationUi((MainActivity) activity);
+            runOnMainSync(() -> ((android.widget.Button) field(activity, "addPackButton")).performClick());
+            waitForWork(activity);
+            runOnMainSync(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "packDialog");
+                android.widget.ListView list = findList(dialog.getWindow().getDecorView());
+                check(list != null && list.getAdapter().getCount() > 0, "Pack picker can select a pack for editor tests");
+                list.performItemClick(list.getAdapter().getView(0, null, list), 0, list.getAdapter().getItemId(0));
+            });
+            waitForWork(activity);
             IconRepository.Pack editorPack = (IconRepository.Pack) field(activity, "pack");
+            check(editorPack != null, "Editor tests start with a selected pack");
             IconRepository.Pack primaryPack = editorPack.members.isEmpty() ? editorPack : editorPack.members.get(0);
             verifyMultiPackUi((MainActivity) activity, primaryPack);
             verifyThemeEditing((MainActivity) activity, primaryPack);
@@ -2143,7 +2293,16 @@ public final class DeviceTests extends Instrumentation {
             verifyIconSourcePicker((MainActivity) activity, primaryPack);
             verifyCropUi((MainActivity) activity);
             verifyTemplateExportUi((MainActivity) activity);
-        } finally { runOnMainSync(activity::finish); }
+        } finally {
+            try { runOnMainSync(activity::finish); }
+            finally { restorePreferences(appDraft, savedDraft); }
+        }
+    }
+
+    private static void restorePreferences(android.content.SharedPreferences preferences, Map<String, ?> saved) {
+        var editor = preferences.edit().clear();
+        for (var entry : saved.entrySet()) editor.putString(entry.getKey(), (String) entry.getValue());
+        if (!editor.commit()) throw new AssertionError("Could not restore the device test draft");
     }
 
     private void verifyTemplateExportUi(MainActivity activity) throws Exception {

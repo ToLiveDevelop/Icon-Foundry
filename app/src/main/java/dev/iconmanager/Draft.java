@@ -30,6 +30,7 @@ final class Draft {
     boolean backgroundClip = true;
     IconShape shape = IconShape.ROUNDED_SQUARE;
     int[] corners = IconShape.DEFAULT_CORNERS.clone();
+    String shapeFile = "";
     final Map<String, String> overrides = new LinkedHashMap<>();
 
     static Draft load(Context context) throws JSONException {
@@ -83,6 +84,10 @@ final class Draft {
         } catch (IllegalArgumentException error) {
             throw new JSONException(App.text(R.string.saved_shape_error) + j.optString("shape"), error);
         }
+        d.shapeFile = j.optString("shapeFile");
+        if (d.shape == IconShape.FILE ? !FileIcons.isFile(d.shapeFile) : !d.shapeFile.isEmpty()) {
+            throw new JSONException(App.text(R.string.mask_file_invalid));
+        }
         JSONObject overrides = j.optJSONObject("overrides");
         if (overrides != null) {
             for (var keys = overrides.keys(); keys.hasNext();) {
@@ -107,7 +112,7 @@ final class Draft {
 
     boolean hasUnsavedChanges(Context context) {
         if (packs.isEmpty() && title.isEmpty() && overrides.isEmpty() && coverPath.isEmpty()
-                && wallpaperPath.isEmpty() && overlay.isEmpty() && background.isEmpty()) {
+                && wallpaperPath.isEmpty() && overlay.isEmpty() && background.isEmpty() && shapeFile.isEmpty()) {
             return false;
         }
         if (templateId.isEmpty()) return true;
@@ -131,6 +136,7 @@ final class Draft {
             if (!overlay.isEmpty()) digest.update(FileIcons.bytes(context, overlay));
             if (!background.isEmpty()) digest.update(FileIcons.bytes(context, background));
         }
+        if (!shapeFile.isEmpty()) digest.update(FileIcons.bytes(context, shapeFile));
         StringBuilder hex = new StringBuilder();
         for (byte value : digest.digest()) hex.append(String.format(java.util.Locale.ROOT, "%02x", value));
         return hex.toString();
@@ -162,6 +168,10 @@ final class Draft {
             for (int corner : corners) values.put(corner);
             j.put("corners", values);
         }
+        if (shape == IconShape.FILE) {
+            if (!FileIcons.isFile(shapeFile)) throw new JSONException(App.text(R.string.mask_file_invalid));
+            j.put("shapeFile", shapeFile);
+        }
         return j;
     }
 
@@ -171,6 +181,7 @@ final class Draft {
         List<String> references = new ArrayList<>(overrides.values());
         if (!overlay.isEmpty()) references.add(overlay);
         if (!background.isEmpty()) references.add(background);
+        if (!shapeFile.isEmpty()) references.add(shapeFile);
         return references;
     }
 
