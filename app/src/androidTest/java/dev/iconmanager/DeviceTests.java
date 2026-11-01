@@ -692,6 +692,11 @@ public final class DeviceTests extends Instrumentation {
                     check(decor.findViewWithTag("shape-file").getVisibility() == android.view.View.VISIBLE
                                     && findText(decor, activity.getString(R.string.choose_shape_file)) != null,
                             "PNG mask tab explains and exposes file selection");
+                    android.view.View fileHelp = decor.findViewWithTag("help-shape_file_help");
+                    check(((android.widget.LinearLayout.LayoutParams) ((android.view.View) fileHelp.getParent())
+                                    .getLayoutParams()).bottomMargin
+                                    >= 8 * activity.getResources().getDisplayMetrics().density - 1,
+                            "PNG mask heading keeps spacing before the file controls");
                     android.widget.SeekBar maskScale = decor.findViewWithTag("mask-scale");
                     check(maskScale != null && maskScale.isShown() && maskScale.getProgress() == 100,
                             "PNG mask tab exposes the mask scale slider");
@@ -914,6 +919,9 @@ public final class DeviceTests extends Instrumentation {
                         Object optional = field(activity, section);
                         android.view.View content = (android.view.View) field(optional, "content");
                         android.view.View toggle = (android.view.View) field(optional, "toggle");
+                        check(((android.widget.LinearLayout.LayoutParams) content.getLayoutParams()).topMargin
+                                        >= 8 * activity.getResources().getDisplayMetrics().density - 1,
+                                "Optional section heading keeps spacing before its controls: " + section);
                         check(content.getVisibility() == android.view.View.GONE,
                                 "Empty optional section starts collapsed: " + section);
                         toggle.performClick();
@@ -3407,6 +3415,9 @@ public final class DeviceTests extends Instrumentation {
                 check(identity.getChildCount() == 2 && identity.findViewWithTag("help-filename_help") != null
                                 && findText(identity, activity.getString(R.string.filename_help)) == null,
                         "Automatic naming explanation moved to the title help button");
+                check(((android.widget.LinearLayout.LayoutParams) identity.getChildAt(0).getLayoutParams()).bottomMargin
+                                >= 8 * density - 1,
+                        "Theme title help row keeps spacing before the text field");
                 android.widget.LinearLayout body = (android.widget.LinearLayout) title.getParent().getParent();
                 check(findText(body.getChildAt(1), activity.getString(R.string.add_pack)) != null,
                         "Pack selection is the first form card");
@@ -3419,6 +3430,11 @@ public final class DeviceTests extends Instrumentation {
                                     && findText(body, activity.getString(help)) == null,
                             "Editor block has its own help button instead of small inline text: "
                                     + activity.getResources().getResourceEntryName(help));
+                    android.widget.ImageButton helpButton = (android.widget.ImageButton) button;
+                    check(helpButton.getImageTintList().getDefaultColor() == (int) field(activity, "MUTED")
+                                    && helpButton.getPaddingLeft() >= 14 * density - 1
+                                    && helpButton.getPaddingRight() >= 14 * density - 1,
+                            "Help icon is smaller and muted while retaining a 48dp touch target");
                 }
                 body.findViewWithTag("help-scope_help").performClick();
                 android.app.Dialog helpDialog = (android.app.Dialog) field(activity, "helpDialog");

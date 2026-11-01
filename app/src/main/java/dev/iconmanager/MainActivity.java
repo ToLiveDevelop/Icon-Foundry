@@ -276,14 +276,18 @@ public final class MainActivity extends Activity {
         button.setTag("help-" + getResources().getResourceEntryName(texts[0]));
         button.setContentDescription(getString(R.string.help_about, title));
         button.setTooltipText(getString(R.string.help));
-        button.setImageTintList(ColorStateList.valueOf(ACCENT_TEXT));
-        button.setBackground(buttonSurface(CONTROL, 24));
+        button.setImageTintList(ColorStateList.valueOf(MUTED));
+        button.setPadding(dp(14), dp(14), dp(14), dp(14));
+        button.setBackground(buttonSurface(Color.TRANSPARENT, 24));
         return button;
     }
 
     /** Places a help button after a heading view while letting the heading keep its full width. */
     private LinearLayout withHelp(View heading, String title, int... texts) {
         LinearLayout line = row();
+        LinearLayout.LayoutParams lineParams = new LinearLayout.LayoutParams(-1, -2);
+        lineParams.bottomMargin = dp(8);
+        line.setLayoutParams(lineParams);
         line.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(48), dp(48));
         params.setMarginStart(dp(8));
@@ -2398,7 +2402,9 @@ public final class MainActivity extends Activity {
             toggle.setElevation(0);
             panel.addView(help.length == 0 ? toggle : withHelp(toggle, getString(heading), help),
                     new LinearLayout.LayoutParams(-1, -2));
-            panel.addView(content, new LinearLayout.LayoutParams(-1, -2));
+            LinearLayout.LayoutParams contentParams = new LinearLayout.LayoutParams(-1, -2);
+            contentParams.topMargin = dp(8);
+            panel.addView(content, contentParams);
             setExpanded(populated);
         }
 
