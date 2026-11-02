@@ -67,13 +67,25 @@ final class ShapePreview implements AutoCloseable {
     static ShapePreview load(Context context, List<IconRepository.App> examples, int visibleSize,
                              String wallpaperPath, String overlayReference, int overlayScale,
                              String backgroundReference, String shapeMaskReference) throws IOException {
+        return load(context, examples, visibleSize, wallpaperPath, overlayReference, overlayScale,
+                backgroundReference, shapeMaskReference, List.of());
+    }
+
+    static ShapePreview load(Context context, List<IconRepository.App> examples, int visibleSize,
+                             String wallpaperPath, String overlayReference, int overlayScale,
+                             String backgroundReference, String shapeMaskReference,
+                             List<IconFilters.Filter> filters) throws IOException {
         ShapePreview preview = new ShapePreview(visibleSize);
         try {
             if (examples.isEmpty()) throw new IOException(context.getString(R.string.shape_no_apps));
             for (IconRepository.App app : examples) {
                 var icon = IconRepository.unthemedIcon(context.getPackageManager(), app.component());
-                preview.originals.add(IconShape.previewSource(icon, false));
-                preview.unmasked.add(IconShape.previewSource(icon, true));
+                Bitmap original = IconShape.previewSource(icon, false);
+                try { preview.originals.add(IconShape.NONE.prepare(original, IconShape.SIZE, filters)); }
+                finally { original.recycle(); }
+                Bitmap unmasked = IconShape.previewSource(icon, true);
+                try { preview.unmasked.add(IconShape.ROUNDED_SQUARE.prepare(unmasked, IconShape.SIZE, filters)); }
+                finally { unmasked.recycle(); }
                 preview.labels.add(app.label());
             }
             preview.overlay = IconOverlay.load(context, overlayReference);
@@ -171,7 +183,7 @@ final class ShapePreview implements AutoCloseable {
                 finally { scaled.recycle(); }
             }
             for (int i = 0; i < originals.size(); i++) {
-                Bitmap icon = shape.preview((shape == IconShape.NONE ? originals : unmasked).get(i),
+                Bitmap icon = shape.previewPrepared((shape == IconShape.NONE ? originals : unmasked).get(i),
                         visibleSize, corners, activeMask);
                 try {
                     IconOverlay.draw(icon, layer);

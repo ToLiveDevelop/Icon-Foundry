@@ -4,6 +4,10 @@ import android.content.ComponentName;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.LauncherActivityInfo;
+import android.content.pm.LauncherApps;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.res.Resources;
@@ -34,10 +38,21 @@ final class IconRepository {
     }
     record Icon(String name, String category, int id) {}
 
+    static final String PARALLEL_SPACE = "com.hihonor.parallelspace";
+    /** Entries that the main profile's PackageManager cannot resolve: other profiles and virtual shortcuts. */
+    private static final Map<ComponentName, ActivityInfo> extraActivities = new java.util.concurrent.ConcurrentHashMap<>();
+
     /** Reads the launcher icon file from the app's own resources, before the applied HONOR theme masks it. */
     static Drawable unthemedIcon(PackageManager manager, ComponentName component)
             throws PackageManager.NameNotFoundException {
-        var info = manager.getActivityInfo(component, PackageManager.ComponentInfoFlags.of(0));
+        ActivityInfo info;
+        boolean extra = false;
+        try { info = manager.getActivityInfo(component, PackageManager.ComponentInfoFlags.of(0)); }
+        catch (PackageManager.NameNotFoundException missing) {
+            info = extraActivities.get(component);
+            if (info == null) throw missing;
+            extra = true;
+        }
         int resource = info.getIconResource();
         if (resource != 0) {
             try {
@@ -62,7 +77,7 @@ final class IconRepository {
                 android.util.Log.w("IconManager", "Unthemed icon unavailable for " + component, error);
             }
         }
-        return manager.getActivityIcon(component);
+        return extra ? info.loadUnbadgedIcon(manager) : manager.getActivityIcon(component);
     }
 
     static final class Pack {
@@ -321,22 +336,57 @@ final class IconRepository {
     }
 
     private final PackageManager pm;
+    private final LauncherApps launcherApps;
     private final java.io.File fileIcons;
 
     IconRepository(Context context) {
         pm = context.getPackageManager();
+        launcherApps = context.getSystemService(LauncherApps.class);
         fileIcons = FileIcons.directory(context);
     }
 
     List<App> apps() {
         List<App> apps = new ArrayList<>();
-        Set<String> seen = new LinkedHashSet<>();
+        Set<String> seen = new LinkedHashSet<>(), packages = new LinkedHashSet<>();
         Intent launcher = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
         for (ResolveInfo resolve : pm.queryIntentActivities(launcher, 0)) {
             ComponentName name = new ComponentName(resolve.activityInfo.packageName, resolve.activityInfo.name);
+            packages.add(name.getPackageName());
             if (seen.add(name.flattenToString())) {
                 apps.add(new App(name, resolve.loadLabel(pm).toString()));
             }
+        }
+        // HONOR themes work-profile apps by package too; apps also in the main profile are already covered.
+        if (launcherApps != null) {
+            for (android.os.UserHandle user : launcherApps.getProfiles()) {
+                if (user.equals(android.os.Process.myUserHandle())) continue;
+                List<LauncherActivityInfo> activities;
+                try { activities = launcherApps.getActivityList(null, user); }
+                catch (SecurityException hidden) {
+                    android.util.Log.w("IconManager", "Profile apps unavailable for " + user, hidden);
+                    continue;
+                }
+                for (LauncherActivityInfo info : activities) {
+                    ComponentName name = info.getComponentName();
+                    if (packages.contains(name.getPackageName()) || !seen.add(name.flattenToString())) continue;
+                    extraActivities.put(name, info.getActivityInfo());
+                    apps.add(new App(name, info.getLabel().toString()));
+                }
+            }
+        }
+        try {
+            ApplicationInfo parallel = pm.getApplicationInfo(PARALLEL_SPACE, 0);
+            ComponentName name = new ComponentName(PARALLEL_SPACE, PARALLEL_SPACE + ".launcher.InitActivity");
+            if (seen.add(name.flattenToString())) {
+                ActivityInfo entry = new ActivityInfo();
+                entry.applicationInfo = parallel;
+                entry.packageName = PARALLEL_SPACE;
+                entry.name = name.getClassName();
+                extraActivities.put(name, entry);
+                apps.add(new App(name, pm.getApplicationLabel(parallel).toString()));
+            }
+        } catch (PackageManager.NameNotFoundException absent) {
+            // Parallel Space exists only on HONOR builds that ship it.
         }
         apps.sort(Comparator.comparing(App::label, String.CASE_INSENSITIVE_ORDER).thenComparing(App::key));
         return apps;

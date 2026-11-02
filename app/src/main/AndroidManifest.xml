@@ -3,6 +3,7 @@
     <queries>
         <package android:name="com.hihonor.android.thememanager" />
         <package android:name="com.huawei.android.thememanager" />
+        <package android:name="com.hihonor.parallelspace" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />

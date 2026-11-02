@@ -74,6 +74,15 @@ public final class DeviceTests extends Instrumentation {
             check(true, "Device test artifacts removed");
             return;
         }
+        if ("true".equals(arguments.getString("extraLauncherOnly"))) {
+            verifyExtraLauncherEntries(context, new IconRepository(context));
+            return;
+        }
+        verifyPositionFilter(context);
+        if ("true".equals(arguments.getString("positionOnly"))) {
+            verifyPositionUiFixture(context);
+            return;
+        }
         verifyCoverAndReplacement(context);
         Bitmap previewSource = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
         previewSource.eraseColor(android.graphics.Color.RED);
@@ -107,6 +116,7 @@ public final class DeviceTests extends Instrumentation {
                     && info.badge().getHeight() == 96, "Discovered pack has an application icon for picker");
         }
         IconRepository.Pack pack = repository.load(packName);
+        verifyExtraLauncherEntries(context, repository);
         verifyNativeResolution(context, repository, packs, pack);
         if ("true".equals(arguments.getString("nativeResolutionOnly"))) return;
         verifyShapeExamples(context, pack);
@@ -114,6 +124,7 @@ public final class DeviceTests extends Instrumentation {
         verifySettingsResources(context);
         verifyOverlay(context, pack);
         verifyBackground(context, pack);
+        verifyIconFilters(context, pack);
         if ("true".equals(arguments.getString("settingsOverlayOnly"))) {
             verifySettingsUi(context);
             return;
@@ -528,6 +539,8 @@ public final class DeviceTests extends Instrumentation {
                     verifyIconScaleUi(result);
                     verifyOverlayUi(result);
                     verifyBackgroundUi(result);
+                    verifyFiltersUi(result);
+                    verifyPositionUi(result);
                 }
             }
         } finally {
@@ -664,6 +677,7 @@ public final class DeviceTests extends Instrumentation {
     private void verifyShapePickerUi(MainActivity activity) throws Exception {
         Draft original = (Draft) field(activity, "draft");
         Draft isolated = Draft.fromJson(original.toJson());
+        isolated.filters.clear();
         isolated.wallpaperPath = "";
         isolated.shape = IconShape.ROUNDED_SQUARE;
         isolated.overlay = "";
@@ -912,6 +926,7 @@ public final class DeviceTests extends Instrumentation {
     private void verifyIconScaleUi(MainActivity activity) throws Exception {
         Draft original = (Draft) field(activity, "draft");
         Draft isolated = Draft.fromJson(original.toJson());
+        isolated.filters.clear();
         isolated.overlay = ""; isolated.overlayAll = false;
         isolated.background = ""; isolated.backgroundAll = false;
         isolated.iconScale = 100;
@@ -955,6 +970,7 @@ public final class DeviceTests extends Instrumentation {
     private void verifyOverlayUi(MainActivity activity) throws Exception {
         Draft original = (Draft) field(activity, "draft");
         Draft isolated = Draft.fromJson(original.toJson());
+        isolated.filters.clear();
         isolated.overlay = ""; isolated.overlayAll = false;
         isolated.background = "";
         isolated.coverPath = ""; isolated.wallpaperPath = "";
@@ -1076,6 +1092,7 @@ public final class DeviceTests extends Instrumentation {
     private void verifyBackgroundUi(MainActivity activity) throws Exception {
         Draft original = (Draft) field(activity, "draft");
         Draft isolated = Draft.fromJson(original.toJson());
+        isolated.filters.clear();
         isolated.background = ""; isolated.backgroundScale = 100; isolated.backgroundClip = true; isolated.backgroundAll = false;
         isolated.overlay = ""; isolated.wallpaperPath = ""; isolated.shape = IconShape.ROUNDED_SQUARE;
         isolated.iconScale = 100;
@@ -1627,6 +1644,86 @@ public final class DeviceTests extends Instrumentation {
         } finally { preferences.edit().clear().commit(); }
     }
 
+    private void verifyExtraLauncherEntries(Context context, IconRepository repository) throws Exception {
+        List<IconRepository.App> apps = repository.apps();
+        android.content.pm.PackageManager manager = context.getPackageManager();
+        java.util.Set<String> keys = new java.util.HashSet<>();
+        for (IconRepository.App app : apps) check(keys.add(app.key()), "Launcher entries are unique: " + app.key());
+        var launcherApps = context.getSystemService(android.content.pm.LauncherApps.class);
+        java.util.Set<String> main = new java.util.HashSet<>();
+        for (var info : manager.queryIntentActivities(new android.content.Intent(android.content.Intent.ACTION_MAIN)
+                .addCategory(android.content.Intent.CATEGORY_LAUNCHER), 0)) main.add(info.activityInfo.packageName);
+        int profileOnly = 0;
+        for (android.os.UserHandle user : launcherApps.getProfiles()) {
+            if (user.equals(android.os.Process.myUserHandle())) continue;
+            for (var info : launcherApps.getActivityList(null, user)) {
+                if (main.contains(info.getComponentName().getPackageName())) continue;
+                profileOnly++;
+                String key = info.getComponentName().flattenToString();
+                check(keys.contains(key), "Profile-only app is listed for theming: " + key);
+                Bitmap icon = IconShape.previewSource(IconRepository.unthemedIcon(manager, info.getComponentName()), true);
+                try { check(IconRepository.Pack.visibleBounds(icon).width() > 0, "Profile-only app icon renders: " + key); }
+                finally { icon.recycle(); }
+            }
+        }
+        boolean parallel;
+        try { manager.getApplicationInfo(IconRepository.PARALLEL_SPACE, 0); parallel = true; }
+        catch (android.content.pm.PackageManager.NameNotFoundException absent) { parallel = false; }
+        IconRepository.App entry = apps.stream().filter(app -> app.component().getPackageName()
+                .equals("com.hihonor.parallelspace")).findFirst().orElse(null);
+        check(parallel == (entry != null), "Parallel Space desktop entry uses its actual package");
+        check(apps.stream().noneMatch(app -> app.component().getPackageName().equals("com.hihonor.pallarspace")),
+                "Parallel Space is not listed under the misspelled package");
+        String legacyKey = "com.hihonor.pallarspace/com.hihonor.parallelspace.launcher.InitActivity";
+        String correctedKey = "com.hihonor.parallelspace/com.hihonor.parallelspace.launcher.InitActivity";
+        for (String value : new String[]{"", "dev.test:parallel"}) {
+            org.json.JSONObject saved = new org.json.JSONObject().put("overrides",
+                    new org.json.JSONObject().put(legacyKey, value));
+            Draft restored = Draft.fromJson(saved);
+            check(value.equals(restored.overrides.get(correctedKey)) && !restored.overrides.containsKey(legacyKey),
+                    "Saved Parallel Space assignments migrate to the corrected package");
+            saved.getJSONObject("overrides").put(correctedKey, "dev.test:current");
+            check("dev.test:current".equals(Draft.fromJson(saved).overrides.get(correctedKey)),
+                    "Current Parallel Space assignment takes priority over a legacy assignment");
+        }
+        if (entry != null) {
+            Bitmap icon = IconShape.previewSource(IconRepository.unthemedIcon(manager, entry.component()), true);
+            try { check(IconRepository.Pack.visibleBounds(icon).width() > 0, "Parallel Space icon renders"); }
+            finally { icon.recycle(); }
+            IconRepository.Pack fake = new IconRepository.Pack("dev.test", "Test", context.getResources(), null, manager);
+            fake.icons.put("parallel", new IconRepository.Icon("parallel", "", R.drawable.app_icon));
+            fake.byPackage.put(IconRepository.PARALLEL_SPACE, "parallel");
+            check("parallel".equals(fake.automatic(entry)), "Pack icon for Parallel Space package themes its desktop entry");
+            check(ThemeEngine.targets(List.of(entry), fake, Map.of()).containsKey("com.hihonor.parallelspace"),
+                    "Parallel Space export targets the actual package");
+            Bitmap cover = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888);
+            IconFilters.ColorCorrection correction = new IconFilters.ColorCorrection();
+            correction.set(2, -100);
+            try {
+                for (boolean fullPack : new boolean[]{false, true}) {
+                    for (boolean filtered : new boolean[]{false, true}) {
+                        ThemeEngine.Built built = ThemeEngine.build(context, "Parallel Space", fullPack,
+                                IconShape.NONE, null, false, fake, List.of(entry),
+                                filtered ? Map.of(entry.key(), "") : Map.of(), cover, null, null, false,
+                                false, null, false, true, null, 100,
+                                filtered ? List.of(correction) : List.of(), (done, total) -> {});
+                        try (ZipFile archive = new ZipFile(built.file());
+                             ZipInputStream icons = new ZipInputStream(archive.getInputStream(archive.getEntry("icons")))) {
+                            java.util.Set<String> names = new java.util.HashSet<>();
+                            for (ZipEntry file; (file = icons.getNextEntry()) != null;) names.add(file.getName());
+                            check(names.contains("com.hihonor.parallelspace.png")
+                                            && !names.contains("com.hihonor.pallarspace.png"),
+                                    "Parallel Space PNG uses the actual package: full=" + fullPack + ", filtered=" + filtered);
+                        } finally { Files.deleteIfExists(built.file().toPath()); }
+                    }
+                }
+            } finally { cover.recycle(); }
+        }
+        Bundle report = new Bundle();
+        report.putString("stream", "Extra launcher entries: profile-only=" + profileOnly + ", parallelSpace=" + parallel + "\n");
+        sendStatus(0, report);
+    }
+
     private void verifyNativeResolution(Context context, IconRepository repository,
                                         List<IconRepository.PackInfo> packs, IconRepository.Pack base) throws Exception {
         long start = android.os.SystemClock.elapsedRealtime();
@@ -1635,8 +1732,15 @@ public final class DeviceTests extends Instrumentation {
         IconRepository.Pack high = packs.stream().anyMatch(info -> info.packageName().equals("com.pressedprem.iconpack"))
                 ? repository.load("com.pressedprem.iconpack") : base;
         int highSize = high.iconSize();
-        if (high != base) check(highSize == 256,
-                "Pressed uses the predominant 256px appfilter canvas, not outliers or preview pictures: " + highSize);
+        if (high != base) {
+            check(highSize == 256,
+                    "Pressed uses the predominant 256px appfilter canvas, not outliers or preview pictures: " + highSize);
+            IconFilters.Position position = new IconFilters.Position();
+            position.set(0, 75);
+            position.set(1, 15);
+            position.set(3, 20);
+            verifyPositionExport(context, high, List.of(position), false);
+        }
         IconRepository.Pack combined = IconRepository.combine(List.of(base, high));
         int size = Math.max(baseSize, highSize);
         check(combined.iconSize() == size && IconRepository.combine(List.of(high, base)).iconSize() == size,
@@ -2202,6 +2306,574 @@ public final class DeviceTests extends Instrumentation {
             if (artifacts != null) for (File file : artifacts) Files.deleteIfExists(file.toPath());
             Files.deleteIfExists(directory.toPath());
         }
+    }
+
+    private IconRepository.Pack positionFixture(Context context) {
+        IconRepository.Pack pack = new IconRepository.Pack(context.getPackageName(), "Position fixture",
+                context.getResources(), null, context.getPackageManager());
+        pack.icons.put("fixture_icon", new IconRepository.Icon("fixture_icon", "", R.drawable.app_icon));
+        pack.byPackage.put("dev.position.future", "fixture_icon");
+        setField(pack, "iconSize", 192);
+        setField(pack, "fallbackSize", 176);
+        return pack;
+    }
+
+    private void verifyPositionFilter(Context context) throws Exception {
+        IconFilters.Position position = (IconFilters.Position) IconFilters.create("position");
+        check(position.neutral() && !IconFilters.active(List.of(position))
+                        && java.util.Arrays.equals(position.values, new int[]{100, 0, 0, 0, 0}),
+                "Position defaults are neutral");
+        for (int i = 0; i < position.fields.length; i++) {
+            int field = i;
+            expectFailure(() -> position.set(field, position.min[field] - 1), "Position rejects value below range");
+            expectFailure(() -> position.set(field, position.max[field] + 1), "Position rejects value above range");
+        }
+        expectFailure(() -> IconFilters.fromJson(new org.json.JSONArray(
+                "[{\"type\":\"position\",\"scale\":151}]")), "Position rejects an invalid saved scale");
+        expectFailure(() -> IconFilters.fromJson(new org.json.JSONArray(
+                "[{\"type\":\"position\",\"offsetX\":101}]")), "Position rejects an invalid saved offset");
+        expectFailure(() -> IconFilters.fromJson(new org.json.JSONArray(
+                "[{\"type\":\"position\",\"skewY\":-46}]")), "Position rejects an invalid saved skew");
+        expectFailure(() -> IconFilters.fromJson(new org.json.JSONArray(
+                "[{\"type\":\"position\",\"scale\":100.5}]")), "Position rejects non-integer values");
+        expectFailure(() -> IconFilters.fromJson(new org.json.JSONArray(
+                "[{\"type\":\"position\",\"rotation\":1}]")), "Position rejects unknown fields");
+
+        position.set(0, 75);
+        position.set(1, 15);
+        position.set(2, -10);
+        position.set(3, 20);
+        position.set(4, -12);
+        IconFilters.ColorCorrection color = new IconFilters.ColorCorrection();
+        color.set(2, -100);
+        List<IconFilters.Filter> chain = List.of(color, position);
+        List<IconFilters.Filter> restored = IconFilters.fromJson(IconFilters.toJson(chain));
+        check(IconFilters.key(restored).equals(IconFilters.key(chain))
+                        && restored.get(0) instanceof IconFilters.ColorCorrection
+                        && restored.get(1) instanceof IconFilters.Position,
+                "Mixed filter chain round-trips with its order and all position parameters");
+        List<IconFilters.Filter> copied = IconFilters.copy(chain);
+        position.set(1, 16);
+        check(((IconFilters.Position) copied.get(1)).values[1] == 15, "Position copies do not share values");
+        position.set(1, 15);
+
+        Draft draft = new Draft();
+        draft.filters.addAll(IconFilters.copy(chain));
+        check(IconFilters.key(Draft.fromJson(draft.toJson()).filters).equals(IconFilters.key(chain)),
+                "Draft preserves a mixed position filter chain");
+        File directory = Files.createTempDirectory(context.getCacheDir().toPath(), "position-template-").toFile();
+        Context isolated = new android.content.ContextWrapper(context) {
+            @Override public File getFilesDir() { return directory; }
+        };
+        try {
+            TemplateStore store = new TemplateStore(isolated);
+            TemplateStore.Entry saved = store.save(draft, "Position test", true);
+            check(IconFilters.key(store.open(saved.id()).filters).equals(IconFilters.key(chain)),
+                    "Saved template restores position and filter order");
+        } finally {
+            for (String name : List.of("templates.json", "templates.json.new", "templates.json.bak"))
+                Files.deleteIfExists(new File(directory, name).toPath());
+            Files.deleteIfExists(directory.toPath());
+        }
+
+        Bitmap source = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+        android.graphics.Paint red = new android.graphics.Paint();
+        red.setColor(Color.RED);
+        new android.graphics.Canvas(source).drawRect(48, 48, 144, 144, red);
+        Bitmap original = source.copy(Bitmap.Config.ARGB_8888, false);
+        try {
+            IconFilters.Position scale = new IconFilters.Position();
+            scale.set(0, 50);
+            Bitmap small = IconShape.CIRCLE.preview(source, 176, null, null, List.of(scale));
+            try {
+                android.graphics.Rect bounds = IconRepository.Pack.visibleBounds(small);
+                check(Math.abs(bounds.width() - 96) <= 1 && Math.abs(bounds.height() - 96) <= 1
+                                && Math.abs(bounds.centerX() - 96) <= 1 && Math.abs(bounds.centerY() - 96) <= 1,
+                        "50 percent position scale remains centered inside the shape");
+            } finally { small.recycle(); }
+            scale.set(1, 20);
+            Bitmap shiftedX = IconShape.CIRCLE.preview(source, 176, null, null, List.of(scale));
+            try {
+                android.graphics.Rect bounds = IconRepository.Pack.visibleBounds(shiftedX);
+                check(Math.abs(bounds.centerX() - 134) <= 2 && Math.abs(bounds.centerY() - 96) <= 1,
+                        "Positive X offset remains visible after shape normalization");
+            } finally { shiftedX.recycle(); }
+            scale.set(1, 0);
+            scale.set(2, -20);
+            Bitmap shiftedY = IconShape.CIRCLE.preview(source, 176, null, null, List.of(scale));
+            try {
+                android.graphics.Rect bounds = IconRepository.Pack.visibleBounds(shiftedY);
+                check(Math.abs(bounds.centerX() - 96) <= 1 && Math.abs(bounds.centerY() - 58) <= 2,
+                        "Negative Y offset moves upward without being recentered");
+            } finally { shiftedY.recycle(); }
+            scale.set(1, 10);
+            scale.set(2, 0);
+            for (int size : new int[]{192, 384}) {
+                Bitmap sized = IconShape.CIRCLE.preview(source, 176, null, null, size, List.of(scale));
+                try {
+                    android.graphics.Rect bounds = IconRepository.Pack.visibleBounds(sized);
+                    check(Math.abs(bounds.width() - size / 2) <= 2
+                                    && Math.abs(bounds.centerX() - size * .6f) <= 2,
+                            "Position percentages use the same proportions at " + size + " px");
+                } finally { sized.recycle(); }
+            }
+            Bitmap noMask = IconShape.NONE.preview(source, 176, null, null, List.of(scale));
+            try {
+                android.graphics.Rect bounds = IconRepository.Pack.visibleBounds(noMask);
+                check(Math.abs(bounds.width() - 48) <= 1 && Math.abs(bounds.centerX() - 115) <= 2,
+                        "Position also works when no shape is selected");
+            } finally { noMask.recycle(); }
+            check(source.sameAs(original), "Preparing a positioned preview does not modify its source");
+
+            IconFilters.ColorCorrection grey = new IconFilters.ColorCorrection();
+            grey.set(2, -100);
+            Bitmap filtered = source.copy(Bitmap.Config.ARGB_8888, true);
+            try {
+                grey.apply(filtered);
+                Bitmap before = IconShape.CIRCLE.preview(filtered, 176, null, null);
+                Bitmap after = IconShape.CIRCLE.preview(source, 176, null, null,
+                        List.of(grey, new IconFilters.Position()));
+                try { check(before.sameAs(after), "Neutral position preserves existing color-only rendering"); }
+                finally { before.recycle(); after.recycle(); }
+            } finally { filtered.recycle(); }
+
+            scale.set(1, 0);
+            Bitmap icon = IconShape.CIRCLE.preview(source, 176, null, null, List.of(scale));
+            Bitmap background = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+            background.eraseColor(Color.BLUE);
+            Bitmap overlay = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+            android.graphics.Paint green = new android.graphics.Paint();
+            green.setColor(Color.GREEN);
+            new android.graphics.Canvas(overlay).drawRect(86, 20, 106, 32, green);
+            Bitmap border = IconOverlay.border(overlay, IconShape.CIRCLE, null, 176, false);
+            Bitmap backdrop = IconBackground.render(background, IconShape.CIRCLE, null, 176, true);
+            try {
+                IconOverlay.draw(icon, border);
+                IconBackground.draw(icon, backdrop);
+                check(icon.getPixel(96, 25) == Color.GREEN && icon.getPixel(96, 40) == Color.BLUE
+                                && icon.getPixel(96, 96) == Color.RED && Color.alpha(icon.getPixel(0, 0)) == 0,
+                        "Position changes the icon while the mask, overlay and background stay fixed");
+            } finally {
+                icon.recycle(); background.recycle(); overlay.recycle(); border.recycle(); backdrop.recycle();
+            }
+        } finally { source.recycle(); original.recycle(); }
+
+        Bitmap block = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888);
+        new android.graphics.Canvas(block).drawRect(40, 40, 60, 60, red);
+        try {
+            IconFilters.Position skewX = new IconFilters.Position();
+            skewX.set(3, 45);
+            Bitmap x = block.copy(Bitmap.Config.ARGB_8888, true);
+            try {
+                skewX.apply(x);
+                check(Color.alpha(x.getPixel(35, 42)) > 0 && Color.alpha(x.getPixel(65, 42)) == 0
+                                && Color.alpha(x.getPixel(65, 57)) > 0 && Color.alpha(x.getPixel(35, 57)) == 0,
+                        "Positive X skew shifts the top left and the bottom right");
+            } finally { x.recycle(); }
+            IconFilters.Position skewY = new IconFilters.Position();
+            skewY.set(4, 45);
+            Bitmap y = block.copy(Bitmap.Config.ARGB_8888, true);
+            try {
+                skewY.apply(y);
+                check(Color.alpha(y.getPixel(42, 35)) > 0 && Color.alpha(y.getPixel(42, 65)) == 0
+                                && Color.alpha(y.getPixel(57, 65)) > 0 && Color.alpha(y.getPixel(57, 35)) == 0,
+                        "Positive Y skew shifts the left up and the right down");
+            } finally { y.recycle(); }
+            skewX.set(4, 45);
+            Bitmap both = block.copy(Bitmap.Config.ARGB_8888, true);
+            try {
+                skewX.apply(both);
+                int pixels = 0;
+                for (int py = 0; py < 100; py++) for (int px = 0; px < 100; px++)
+                    if (Color.alpha(both.getPixel(px, py)) >= 128) pixels++;
+                check(pixels >= 300, "Combined extreme X/Y skews do not collapse into a line");
+            } finally { both.recycle(); }
+        } finally { block.recycle(); }
+
+        Bitmap full = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888);
+        full.eraseColor(Color.RED);
+        IconFilters.Position larger = new IconFilters.Position(), smaller = new IconFilters.Position();
+        larger.set(0, 150);
+        smaller.set(0, 50);
+        Bitmap largeFirst = full.copy(Bitmap.Config.ARGB_8888, true);
+        Bitmap smallFirst = full.copy(Bitmap.Config.ARGB_8888, true);
+        try {
+            IconFilters.apply(List.of(larger, smaller), largeFirst);
+            IconFilters.apply(List.of(smaller, larger), smallFirst);
+            int firstWidth = IconRepository.Pack.visibleBounds(largeFirst).width();
+            int secondWidth = IconRepository.Pack.visibleBounds(smallFirst).width();
+            check(Math.abs(firstWidth - 50) <= 2 && Math.abs(secondWidth - 75) <= 2,
+                    "Position filters apply in chain order with per-step clipping");
+        } finally { full.recycle(); largeFirst.recycle(); smallFirst.recycle(); }
+
+        verifyPositionExport(context, positionFixture(context), chain, true);
+    }
+
+    private void verifyPositionExport(Context context, IconRepository.Pack pack,
+                                      List<IconFilters.Filter> filters, boolean fixture) throws Exception {
+        IconRepository.App self = new IconRepository.App(new ComponentName(context.getPackageName(),
+                MainActivity.class.getName()), "Icon Foundry");
+        Map<String, String> noReplacement = Map.of(self.key(), "");
+        Map<String, String> generated = ThemeEngine.withFilteredSystemIcons(List.of(self), pack, noReplacement, filters);
+        check((ThemeEngine.SYSTEM_ICON + self.key()).equals(generated.get(self.key())),
+                "An active position generates an icon for an installed app without a replacement");
+        String assigned = pack.icons.keySet().iterator().next();
+        Map<String, String> manual = Map.of(self.key(), assigned);
+        check(assigned.equals(ThemeEngine.withFilteredSystemIcons(List.of(self), pack, manual, filters).get(self.key())),
+                "Position does not replace a manually assigned icon");
+        check("".equals(ThemeEngine.withFilteredSystemIcons(List.of(self), pack, noReplacement,
+                        List.of(new IconFilters.Position())).get(self.key())),
+                "A neutral position does not generate an icon");
+
+        int size = pack.iconSize(), visibleSize = pack.fallbackSize();
+        Bitmap cover = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888);
+        Bitmap background = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        background.eraseColor(Color.BLUE);
+        Bitmap overlay = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        android.graphics.Paint paint = new android.graphics.Paint();
+        paint.setColor(Color.GREEN);
+        new android.graphics.Canvas(overlay).drawRect(size * .4f, size * .1f, size * .6f, size * .2f, paint);
+        Bitmap source = IconShape.previewSource(IconRepository.unthemedIcon(context.getPackageManager(),
+                self.component()), true, size);
+        Bitmap expected = IconShape.CIRCLE.preview(source, visibleSize, null, null, size, filters);
+        Bitmap border = IconOverlay.border(overlay, IconShape.CIRCLE, null, visibleSize, true);
+        Bitmap backdrop = IconBackground.render(background, IconShape.CIRCLE, null, visibleSize, true);
+        try {
+            IconOverlay.draw(expected, border);
+            IconBackground.draw(expected, backdrop);
+            for (boolean fullPack : fixture ? new boolean[]{false, true} : new boolean[]{false}) {
+                ThemeEngine.Built built = ThemeEngine.build(context, "Position export", fullPack, IconShape.CIRCLE,
+                        null, false, pack, List.of(self), noReplacement, cover, null, overlay, false, true,
+                        background, false, true, null, 100, filters, (done, total) -> {});
+                try (ZipFile archive = new ZipFile(built.file());
+                     ZipInputStream icons = new ZipInputStream(archive.getInputStream(archive.getEntry("icons")))) {
+                    boolean foundSystem = false, foundPack = false;
+                    for (ZipEntry entry; (entry = icons.getNextEntry()) != null;) {
+                        boolean system = entry.getName().equals(context.getPackageName() + ".png");
+                        boolean future = entry.getName().equals("dev.position.future.png");
+                        if (!system && !future) continue;
+                        byte[] bytes = icons.readAllBytes();
+                        Bitmap actual = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                        try {
+                            if (system) {
+                                foundSystem = true;
+                                check(actual.getWidth() == size && actual.getHeight() == size && actual.sameAs(expected),
+                                        "Exported position, shape and layers match the preview at " + size + " px");
+                            } else {
+                                foundPack = true;
+                                Bitmap packIcon = pack.render("fixture_icon", size);
+                                try { check(actual.sameAs(packIcon), "Position does not affect a future pack icon"); }
+                                finally { packIcon.recycle(); }
+                            }
+                        } finally { actual.recycle(); }
+                    }
+                    check(foundSystem && foundPack == fullPack, "Position export respects installed and full-pack modes");
+                } finally { Files.deleteIfExists(built.file().toPath()); }
+            }
+            try (ShapePreview before = ShapePreview.load(context, List.of(self), visibleSize, "", "");
+                 ShapePreview after = ShapePreview.load(context, List.of(self), visibleSize, "", "",
+                         100, "", "", filters)) {
+                Bitmap plain = before.render(IconShape.CIRCLE), positioned = after.render(IconShape.CIRCLE);
+                try { check(!plain.sameAs(positioned), "Shape picker preview reflects the position filter"); }
+                finally { plain.recycle(); positioned.recycle(); }
+            }
+        } finally {
+            cover.recycle(); background.recycle(); overlay.recycle(); source.recycle(); expected.recycle();
+            border.recycle(); backdrop.recycle();
+        }
+    }
+
+    private void verifyIconFilters(Context context, IconRepository.Pack pack) throws Exception {
+        IconFilters.ColorCorrection neutral = (IconFilters.ColorCorrection) IconFilters.create("color");
+        check(neutral.neutral() && !IconFilters.active(List.of(neutral)), "Default color correction is neutral");
+        Bitmap sample = Bitmap.createBitmap(4, 1, Bitmap.Config.ARGB_8888);
+        sample.setPixel(0, 0, android.graphics.Color.RED);
+        sample.setPixel(1, 0, android.graphics.Color.argb(128, 20, 200, 90));
+        sample.setPixel(2, 0, android.graphics.Color.BLUE);
+        Bitmap copy = sample.copy(Bitmap.Config.ARGB_8888, true);
+        try {
+            IconFilters.apply(List.of(neutral), copy);
+            check(copy.sameAs(sample), "Neutral filter leaves pixels unchanged");
+            IconFilters.ColorCorrection grey = (IconFilters.ColorCorrection) IconFilters.create("color");
+            grey.set(2, -100);
+            IconFilters.apply(List.of(grey), copy);
+            for (int x = 0; x < 3; x++) {
+                int pixel = copy.getPixel(x, 0);
+                check(Math.abs(android.graphics.Color.red(pixel) - android.graphics.Color.green(pixel)) <= 1
+                                && Math.abs(android.graphics.Color.green(pixel) - android.graphics.Color.blue(pixel)) <= 1,
+                        "Saturation -100 produces grey pixels");
+            }
+            check(android.graphics.Color.alpha(copy.getPixel(1, 0)) == 128, "Saturation keeps alpha");
+            IconFilters.ColorCorrection transparent = (IconFilters.ColorCorrection) IconFilters.create("color");
+            transparent.set(7, 50);
+            IconFilters.apply(List.of(transparent), copy);
+            check(Math.abs(android.graphics.Color.alpha(copy.getPixel(0, 0)) - 128) <= 1, "Opacity scales alpha");
+            IconFilters.ColorCorrection order = (IconFilters.ColorCorrection) IconFilters.create("color");
+            order.set(0, 40);
+            List<IconFilters.Filter> chain = List.of(grey, order);
+            List<IconFilters.Filter> restored = IconFilters.fromJson(IconFilters.toJson(chain));
+            check(IconFilters.key(restored).equals(IconFilters.key(chain)), "Filter chain survives JSON with order");
+            Draft draft = new Draft();
+            draft.filters.addAll(chain);
+            check(IconFilters.key(Draft.fromJson(draft.toJson()).filters).equals(IconFilters.key(chain)),
+                    "Draft saves filter chain");
+            check(!new Draft().toJson().has("iconFilters"), "Drafts without filters keep their old JSON");
+            expectFailure(() -> IconFilters.fromJson(new org.json.JSONArray(
+                    "[{\"type\":\"blur\"}]")), "Unknown filter type is rejected");
+            expectFailure(() -> IconFilters.fromJson(new org.json.JSONArray(
+                    "[{\"type\":\"color\",\"brightness\":101}]")), "Out-of-range filter value is rejected");
+            expectFailure(() -> IconFilters.fromJson(new org.json.JSONArray(
+                    "[{\"type\":\"color\",\"gamma\":1}]")), "Unknown filter field is rejected");
+        } finally { sample.recycle(); copy.recycle(); }
+
+        IconRepository.App self = new IconRepository.App(new ComponentName(context.getPackageName(),
+                MainActivity.class.getName()), "Icon Foundry");
+        check(pack.selected(self, Map.of()) == null, "Filter export fixture has no pack icon");
+        Bitmap cover = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888);
+        IconFilters.ColorCorrection grey = (IconFilters.ColorCorrection) IconFilters.create("color");
+        grey.set(2, -100);
+        try {
+            expectFailure(() -> ThemeEngine.build(context, "Filter check", false, IconShape.CIRCLE, null,
+                    false, pack, List.of(self), Map.of(), cover, null, null, false, true, null, false, true,
+                    null, 100, List.of(neutral), (done, total) -> {}), "Neutral filters do not export system icons");
+            for (boolean filtered : new boolean[]{true}) {
+                ThemeEngine.Built built = ThemeEngine.build(context, "Filter check", false, IconShape.CIRCLE, null,
+                        false, pack, List.of(self), Map.of(), cover, null, null, false, true, null, false, true,
+                        null, 100, List.of(grey), (done, total) -> {});
+                try (ZipFile archive = new ZipFile(built.file());
+                     ZipInputStream icons = new ZipInputStream(archive.getInputStream(archive.getEntry("icons")))) {
+                    boolean found = false;
+                    for (ZipEntry entry; (entry = icons.getNextEntry()) != null;) {
+                        if (!entry.getName().startsWith(context.getPackageName())) continue;
+                        found = true;
+                        byte[] bytes = icons.readAllBytes();
+                        Bitmap actual = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                        try {
+                            int centre = actual.getPixel(actual.getWidth() / 2, actual.getHeight() / 2);
+                            check(android.graphics.Color.alpha(centre) > 0
+                                            && android.graphics.Color.red(centre) == android.graphics.Color.green(centre)
+                                            && android.graphics.Color.alpha(actual.getPixel(0, 0)) == 0,
+                                    "Filtered system icon is grey and receives the fallback shape");
+                        } finally { actual.recycle(); }
+                    }
+                    check(found == filtered, "Only active filters export system icons: " + filtered);
+                } finally { Files.deleteIfExists(built.file().toPath()); }
+            }
+        } finally { cover.recycle(); }
+    }
+
+    private void verifyFiltersUi(MainActivity activity) throws Exception {
+        Draft original = (Draft) field(activity, "draft");
+        Draft isolated = Draft.fromJson(original.toJson());
+        isolated.filters.clear();
+        var build = MainActivity.class.getDeclaredMethod("buildScreen");
+        build.setAccessible(true);
+        try {
+            runOnMainChecked(() -> {
+                setField(activity, "draft", isolated);
+                build.invoke(activity);
+                android.widget.Button button = activity.getWindow().getDecorView().findViewWithTag("filters");
+                check(button != null && button.getText().toString().equals(activity.getString(R.string.filters)),
+                        "Icon parameters show the filters button");
+                button.performClick();
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
+                android.view.View decor = dialog.getWindow().getDecorView();
+                check(decor.findViewWithTag("filter-example-0") != null && decor.findViewWithTag("filter-example-5") != null,
+                        "Filters show six preview icons");
+                decor.findViewWithTag("filter-add").performClick();
+                android.app.AlertDialog chooser = (android.app.AlertDialog) field(activity, "filterTypeDialog");
+                chooser.getListView().performItemClick(null, 0, 0);
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
+                android.view.View decor = dialog.getWindow().getDecorView();
+                android.widget.ImageView example = decor.findViewWithTag("filter-example-0");
+                check(example.getDrawable() != null, "Filter preview renders a system icon");
+                Bitmap before = ((android.graphics.drawable.BitmapDrawable) example.getDrawable()).getBitmap()
+                        .copy(Bitmap.Config.ARGB_8888, false);
+                android.widget.SeekBar saturation = decor.findViewWithTag("filter-0-saturation");
+                check(saturation != null && saturation.getMin() == -100 && saturation.getProgress() == 0,
+                        "Color correction exposes a saturation slider");
+                saturation.setProgress(-99);
+                saturation.onKeyDown(android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                        new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_LEFT));
+                check(saturation.getProgress() == -100, "Filter slider steps by one");
+                previewBefore = before;
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
+                android.view.View decor = dialog.getWindow().getDecorView();
+                android.widget.ImageView example = decor.findViewWithTag("filter-example-0");
+                try { check(!previewBefore.sameAs(((android.graphics.drawable.BitmapDrawable) example.getDrawable()).getBitmap()),
+                        "Changing a filter updates the preview"); }
+                finally { previewBefore.recycle(); previewBefore = null; }
+                decor.findViewWithTag("filter-add").performClick();
+                ((android.app.AlertDialog) field(activity, "filterTypeDialog")).getListView().performItemClick(null, 0, 0);
+                check(!decor.findViewWithTag("filter-0-up").isEnabled() && decor.findViewWithTag("filter-0-down").isEnabled(),
+                        "Only valid move buttons are enabled");
+                decor.findViewWithTag("filter-0-down").performClick();
+                check(((android.widget.SeekBar) decor.findViewWithTag("filter-1-saturation")).getProgress() == -100,
+                        "Moving a filter changes the chain order");
+                decor.findViewWithTag("filter-0-remove").performClick();
+                check(decor.findViewWithTag("filter-1") == null, "Removing a filter updates the list");
+                dialog.dismiss();
+                check(isolated.filters.isEmpty(), "Closing filters without applying discards changes");
+                activity.getWindow().getDecorView().findViewWithTag("filters").performClick();
+                decor = ((android.app.Dialog) field(activity, "filtersDialog")).getWindow().getDecorView();
+                decor.findViewWithTag("filter-add").performClick();
+                ((android.app.AlertDialog) field(activity, "filterTypeDialog")).getListView().performItemClick(null, 0, 0);
+                android.widget.SeekBar contrast = decor.findViewWithTag("filter-0-contrast");
+                contrast.setProgress(29);
+                contrast.onKeyDown(android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                        new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_RIGHT));
+                android.app.Dialog applied = (android.app.Dialog) field(activity, "filtersDialog");
+                decor.findViewWithTag("filters-apply").performClick();
+                check(isolated.filters.size() == 1 && Draft.load(activity).filters.size() == 1
+                                && ((IconFilters.ColorCorrection) isolated.filters.get(0)).values[1] == 30
+                                && !applied.isShowing(),
+                        "Applying filters saves the chain");
+                check(((android.widget.Button) activity.getWindow().getDecorView().findViewWithTag("filters")).getText()
+                                .toString().equals(activity.getString(R.string.filters_count, 1)),
+                        "Filters button shows the filter count");
+            });
+            waitForThumbnails(activity);
+        } finally {
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
+                if (dialog != null) dialog.dismiss();
+                setField(activity, "draft", original);
+                original.save(activity); build.invoke(activity);
+            });
+            if (previewBefore != null) { previewBefore.recycle(); previewBefore = null; }
+        }
+    }
+
+    private Bitmap previewBefore;
+
+    private void verifyPositionUiFixture(Context context) throws Exception {
+        MainActivity activity = (MainActivity) startActivitySync(new android.content.Intent(context, MainActivity.class)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK));
+        try {
+            waitForWork(activity);
+            IconRepository.Pack fixture = positionFixture(activity);
+            IconRepository.App self = new IconRepository.App(new ComponentName(context.getPackageName(),
+                    MainActivity.class.getName()), "Icon Foundry");
+            runOnMainChecked(() -> {
+                setField(activity, "pack", fixture);
+                setField(activity, "apps", List.of(self));
+                setField(activity, "editing", true);
+                setField(activity, "draft", new Draft());
+            });
+            verifyPositionUi(activity);
+        } finally {
+            runOnMainChecked(activity::finish);
+        }
+    }
+
+    private void verifyPositionUi(MainActivity activity) throws Exception {
+        Draft original = (Draft) field(activity, "draft");
+        Draft isolated = Draft.fromJson(original.toJson());
+        isolated.filters.clear();
+        var build = MainActivity.class.getDeclaredMethod("buildScreen");
+        build.setAccessible(true);
+        Bitmap[] before = {null};
+        try {
+            runOnMainChecked(() -> {
+                setField(activity, "draft", isolated);
+                build.invoke(activity);
+                activity.getWindow().getDecorView().findViewWithTag("filters").performClick();
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
+                android.view.View decor = dialog.getWindow().getDecorView();
+                decor.findViewWithTag("filter-add").performClick();
+                android.app.AlertDialog chooser = (android.app.AlertDialog) field(activity, "filterTypeDialog");
+                check(chooser.getListView().getCount() == 2, "Filter menu offers color and position");
+                chooser.getListView().performItemClick(null, 1, 1);
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
+                android.view.View decor = dialog.getWindow().getDecorView();
+                String[] fields = {"scale", "offsetX", "offsetY", "skewX", "skewY"};
+                for (int i = 0; i < fields.length; i++) {
+                    android.widget.SeekBar slider = decor.findViewWithTag("filter-0-" + fields[i]);
+                    check(slider != null && slider.getMin() == IconFilters.Position.MIN[i]
+                                    && slider.getMax() == IconFilters.Position.MAX[i]
+                                    && slider.getProgress() == IconFilters.Position.DEFAULT[i],
+                            "Position slider starts with the documented range and default: " + fields[i]);
+                    String unit = i < 3 ? "%" : "°";
+                    check(slider.getContentDescription().toString().contains(unit),
+                            "Position slider announces its unit: " + fields[i]);
+                }
+                android.widget.ImageView example = decor.findViewWithTag("filter-example-0");
+                check(example.getDrawable() instanceof android.graphics.drawable.BitmapDrawable,
+                        "Position editor displays a system icon");
+                before[0] = ((android.graphics.drawable.BitmapDrawable) example.getDrawable()).getBitmap()
+                        .copy(Bitmap.Config.ARGB_8888, false);
+                stepPositionSlider(decor, "filter-0-scale", 75);
+                stepPositionSlider(decor, "filter-0-offsetX", 20);
+                stepPositionSlider(decor, "filter-0-offsetY", -10);
+                stepPositionSlider(decor, "filter-0-skewX", 15);
+                stepPositionSlider(decor, "filter-0-skewY", -15);
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
+                android.view.View decor = dialog.getWindow().getDecorView();
+                android.widget.ImageView example = decor.findViewWithTag("filter-example-0");
+                check(!before[0].sameAs(((android.graphics.drawable.BitmapDrawable) example.getDrawable()).getBitmap()),
+                        "Position controls update the pinned preview");
+                before[0].recycle();
+                before[0] = null;
+                decor.findViewWithTag("filter-add").performClick();
+                ((android.app.AlertDialog) field(activity, "filterTypeDialog")).getListView().performItemClick(null, 0, 0);
+                decor.findViewWithTag("filter-0-down").performClick();
+                check(((android.widget.SeekBar) decor.findViewWithTag("filter-1-offsetX")).getProgress() == 20
+                                && ((android.widget.SeekBar) decor.findViewWithTag("filter-1-skewY")).getProgress() == -15,
+                        "Moving position after color preserves all settings");
+                decor.findViewWithTag("filters-apply").performClick();
+                check(isolated.filters.size() == 2 && isolated.filters.get(0) instanceof IconFilters.ColorCorrection
+                                && isolated.filters.get(1) instanceof IconFilters.Position
+                                && java.util.Arrays.equals(((IconFilters.Position) isolated.filters.get(1)).values,
+                                        new int[]{75, 20, -10, 15, -15})
+                                && IconFilters.key(Draft.load(activity).filters).equals(IconFilters.key(isolated.filters)),
+                        "Applying saves the mixed filter order and position settings");
+                activity.getWindow().getDecorView().findViewWithTag("filters").performClick();
+                android.app.Dialog reopened = (android.app.Dialog) field(activity, "filtersDialog");
+                android.view.View reopenedDecor = reopened.getWindow().getDecorView();
+                check(((android.widget.SeekBar) reopenedDecor.findViewWithTag("filter-1-scale")).getProgress() == 75
+                                && ((android.widget.SeekBar) reopenedDecor.findViewWithTag("filter-1-offsetY")).getProgress() == -10,
+                        "Reopening restores the position controls");
+                stepPositionSlider(reopenedDecor, "filter-1-scale", 76);
+                reopened.dismiss();
+                check(((IconFilters.Position) isolated.filters.get(1)).values[0] == 75,
+                        "Closing without applying discards position changes");
+            });
+            waitForThumbnails(activity);
+        } finally {
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
+                if (dialog != null) dialog.dismiss();
+                setField(activity, "draft", original);
+                original.save(activity);
+                build.invoke(activity);
+            });
+            if (before[0] != null) before[0].recycle();
+        }
+    }
+
+    private void stepPositionSlider(android.view.View decor, String tag, int value) {
+        android.widget.SeekBar slider = decor.findViewWithTag(tag);
+        slider.setProgress(value - 1);
+        decor.findViewWithTag(tag + "-increase").performClick();
+        check(slider.getProgress() == value, "Position arrow changes the value by one: " + tag);
     }
 
     private void verifyFileIcons(Context context, IconRepository.Pack pack) throws Exception {

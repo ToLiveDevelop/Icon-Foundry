@@ -9,6 +9,7 @@ import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.drawable.AdaptiveIconDrawable;
 import android.graphics.drawable.Drawable;
+import java.util.List;
 
 enum IconShape {
     NONE(R.string.shape_none),
@@ -36,18 +37,20 @@ enum IconShape {
 
     static Bitmap previewSource(Drawable drawable) { return previewSource(drawable, true); }
 
-    static Bitmap previewSource(Drawable drawable, boolean unmask) {
-        Bitmap source = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888);
+    static Bitmap previewSource(Drawable drawable, boolean unmask) { return previewSource(drawable, unmask, SIZE); }
+
+    static Bitmap previewSource(Drawable drawable, boolean unmask, int size) {
+        Bitmap source = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(source);
         if (unmask && drawable instanceof AdaptiveIconDrawable adaptive) {
-            int inset = Math.round(SIZE * AdaptiveIconDrawable.getExtraInsetFraction());
+            int inset = Math.round(size * AdaptiveIconDrawable.getExtraInsetFraction());
             for (Drawable layer : new Drawable[]{adaptive.getBackground(), adaptive.getForeground()}) {
                 if (layer == null) continue;
-                layer.setBounds(-inset, -inset, SIZE + inset, SIZE + inset);
+                layer.setBounds(-inset, -inset, size + inset, size + inset);
                 layer.draw(canvas);
             }
         } else {
-            drawable.setBounds(0, 0, SIZE, SIZE);
+            drawable.setBounds(0, 0, size, size);
             drawable.draw(canvas);
         }
         return source;
@@ -74,29 +77,75 @@ enum IconShape {
     }
 
     Bitmap preview(Bitmap source, int visibleSize, int[] corners, Bitmap fileMask) {
-        Bitmap result = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888);
+        return preview(source, visibleSize, corners, fileMask, SIZE);
+    }
+
+    /** visibleSize uses preview coordinates; the result has canvasSize pixels per side. */
+    Bitmap preview(Bitmap source, int visibleSize, int[] corners, Bitmap fileMask, int canvasSize) {
+        return preview(source, visibleSize, corners, fileMask, canvasSize, List.of());
+    }
+
+    Bitmap preview(Bitmap source, int visibleSize, int[] corners, Bitmap fileMask,
+                   List<IconFilters.Filter> filters) {
+        return preview(source, visibleSize, corners, fileMask, SIZE, filters);
+    }
+
+    Bitmap preview(Bitmap source, int visibleSize, int[] corners, Bitmap fileMask, int canvasSize,
+                   List<IconFilters.Filter> filters) {
+        return applyMask(prepare(source, canvasSize, filters), visibleSize, corners, fileMask);
+    }
+
+    Bitmap previewPrepared(Bitmap prepared, int visibleSize, int[] corners, Bitmap fileMask) {
+        return applyMask(prepared.copy(Bitmap.Config.ARGB_8888, true), visibleSize, corners, fileMask);
+    }
+
+    /** Normalizes the source before geometry filters so shape cropping cannot undo a position change. */
+    Bitmap prepare(Bitmap source, int canvasSize, List<IconFilters.Filter> filters) {
+        Bitmap result = null, filtered = null;
         try {
+            boolean hasPosition = IconFilters.hasActivePosition(filters);
+            if (!hasPosition && IconFilters.active(filters)) {
+                filtered = source.copy(Bitmap.Config.ARGB_8888, true);
+                IconFilters.apply(filters, filtered);
+            }
+            Bitmap input = filtered == null ? source : filtered;
+            result = Bitmap.createBitmap(canvasSize, canvasSize, Bitmap.Config.ARGB_8888);
             Canvas canvas = new Canvas(result);
             Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
-            int left = source.getWidth(), top = source.getHeight(), right = -1, bottom = -1;
-            for (int y = 0; y < source.getHeight(); y++) for (int x = 0; x < source.getWidth(); x++) {
-                if (Color.alpha(source.getPixel(x, y)) > 0) {
+            int left = input.getWidth(), top = input.getHeight(), right = -1, bottom = -1;
+            int[] line = new int[input.getWidth()];
+            for (int y = 0; y < input.getHeight(); y++) {
+                input.getPixels(line, 0, line.length, 0, y, line.length, 1);
+                for (int x = 0; x < line.length; x++) if (Color.alpha(line[x]) > 0) {
                     left = Math.min(left, x); top = Math.min(top, y);
                     right = Math.max(right, x); bottom = Math.max(bottom, y);
                 }
             }
-            Rect content = right < left ? new Rect(0, 0, source.getWidth(), source.getHeight())
+            Rect content = right < left ? new Rect(0, 0, input.getWidth(), input.getHeight())
                     : new Rect(left, top, right + 1, bottom + 1);
             int extent = Math.min(content.width(), content.height());
             int cx = content.centerX(), cy = content.centerY();
-            Rect crop = this == NONE ? new Rect(0, 0, source.getWidth(), source.getHeight())
+            Rect crop = this == NONE ? new Rect(0, 0, input.getWidth(), input.getHeight())
                     : new Rect(cx - extent / 2, cy - extent / 2, cx - extent / 2 + extent, cy - extent / 2 + extent);
-            canvas.drawBitmap(source, crop, new Rect(0, 0, SIZE, SIZE), paint);
+            canvas.drawBitmap(input, crop, new Rect(0, 0, canvasSize, canvasSize), paint);
+            if (hasPosition) IconFilters.apply(filters, result);
+            return result;
+        } catch (RuntimeException error) {
+            if (result != null) result.recycle();
+            throw error;
+        } finally {
+            if (filtered != null) filtered.recycle();
+        }
+    }
+
+    private Bitmap applyMask(Bitmap result, int visibleSize, int[] corners, Bitmap fileMask) {
+        try {
             if (this != NONE) {
-                Bitmap mask = mask(visibleSize, corners, fileMask);
+                Bitmap mask = mask(visibleSize, corners, fileMask, result.getWidth());
                 try {
+                    Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
                     paint.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN));
-                    canvas.drawBitmap(mask, 0, 0, paint);
+                    new Canvas(result).drawBitmap(mask, 0, 0, paint);
                 } finally { mask.recycle(); }
             }
             return result;

@@ -33,6 +33,7 @@ final class Draft {
     String shapeFile = "";
     int maskScale = 100;
     int iconScale = 100;
+    final List<IconFilters.Filter> filters = new ArrayList<>();
     final Map<String, String> overrides = new LinkedHashMap<>();
 
     static Draft load(Context context) throws JSONException {
@@ -99,6 +100,7 @@ final class Draft {
         if (d.iconScale < IconOverlay.MIN_SCALE || d.iconScale > IconOverlay.MAX_SCALE) {
             throw new JSONException(App.text(R.string.icon_scale_invalid));
         }
+        d.filters.addAll(IconFilters.fromJson(j.optJSONArray("iconFilters")));
         JSONObject overrides = j.optJSONObject("overrides");
         if (overrides != null) {
             for (var keys = overrides.keys(); keys.hasNext();) {
@@ -108,6 +110,13 @@ final class Draft {
                                     value = IconRepository.reference(d.primaryPack(), value);
                 }
                 d.overrides.put(key, value);
+            }
+            // Preserve assignments made before the Parallel Space package key was corrected.
+            String legacyKey = "com.hihonor.pallarspace/com.hihonor.parallelspace.launcher.InitActivity";
+            if (d.overrides.containsKey(legacyKey)) {
+                String correctedKey = new android.content.ComponentName(IconRepository.PARALLEL_SPACE,
+                        IconRepository.PARALLEL_SPACE + ".launcher.InitActivity").flattenToString();
+                d.overrides.putIfAbsent(correctedKey, d.overrides.remove(legacyKey));
             }
         }
         return d;
@@ -185,6 +194,7 @@ final class Draft {
             if (maskScale != 100) j.put("maskScale", maskScale);
         }
         if (iconScale != 100) j.put("iconScale", iconScale);
+        if (!filters.isEmpty()) j.put("iconFilters", IconFilters.toJson(filters));
         return j;
     }
 
