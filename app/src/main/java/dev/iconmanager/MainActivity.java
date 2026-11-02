@@ -85,7 +85,7 @@ public final class MainActivity extends Activity {
     private Dialog packDialog;
     private Dialog cropDialog;
     private Dialog iconDialog;
-    private AlertDialog exportDialog, errorDialog, deleteDialog;
+    private AlertDialog exportDialog, errorDialog, deleteDialog, exportSizeDialog;
     private Dialog progressDialog;
     private TextView progressMessage;
     private String pendingIconApp;
@@ -836,15 +836,21 @@ public final class MainActivity extends Activity {
             iconSizeInfo.setText(R.string.no_pack);
             return;
         }
-        String sizeKey = String.join(",", draft.packs);
+        Map<String, Integer> settings = Map.copyOf(draft.exportSizes);
+        String sizeKey = String.join(",", draft.packs) + settings;
         if (sizeKey.equals(iconSizeInfo.getTag())) return;
         iconSizeInfo.setTag(sizeKey);
         iconSizeInfo.setText(R.string.loading);
         thumbnails.execute(() -> {
             String message;
             try {
-                int size = currentPack.iconSize();
-                message = getString(R.string.icon_resolution, size, size);
+                ExportSizes sizes = new ExportSizes(currentPack, settings);
+                List<String> descriptions = new ArrayList<>();
+                for (IconRepository.Pack member : currentPack.members.isEmpty() ? List.of(currentPack) : currentPack.members) {
+                    int size = sizes.forIcon(IconRepository.reference(member.packageName, "icon"), currentPack.packageName);
+                    descriptions.add(member.label + ": " + size + " × " + size + " px");
+                }
+                message = String.join("\n", descriptions);
             } catch (IOException | RuntimeException error) {
                 Log.e("IconManager", "Не удалось определить разрешение", error);
                 message = error.getMessage();
@@ -1947,7 +1953,7 @@ public final class MainActivity extends Activity {
     }
 
     void removePack(int index) {
-        packs.remove(index);
+        draft.exportSizes.remove(packs.remove(index).packageName);
         packsChanged();
     }
 
@@ -1989,7 +1995,16 @@ public final class MainActivity extends Activity {
         item.addView(badge, new LinearLayout.LayoutParams(dp(48), dp(48)));
         TextView label = text(getString(R.string.pack_count, member.label, member.icons.size()), 15, ACCENT_TEXT);
         label.setPadding(dp(12), 0, dp(8), 0);
-        item.addView(label, new LinearLayout.LayoutParams(0, -2, 1));
+        LinearLayout details = column();
+        details.addView(label);
+        Integer chosen = draft.exportSizes.get(member.packageName);
+        Button resolution = button(R.string.export_resolution, view -> chooseExportSize(member));
+        resolution.setTag("export-size:" + member.packageName);
+        resolution.setText(getString(R.string.export_resolution) + ": "
+                + (chosen == null ? getString(R.string.export_size_native) : chosen + " px"));
+        resolution.setContentDescription(member.label + ", " + resolution.getText());
+        details.addView(resolution);
+        item.addView(details, new LinearLayout.LayoutParams(0, -2, 1));
         Button remove = button(R.string.remove_pack, view -> removePack(packList.indexOfChild(item)));
         remove.setMinWidth(dp(64)); remove.setMinimumWidth(dp(64));
         remove.setPadding(dp(12), dp(6), dp(12), dp(6));
@@ -2045,6 +2060,21 @@ public final class MainActivity extends Activity {
             return true;
         });
         return item;
+    }
+
+    private void chooseExportSize(IconRepository.Pack member) {
+        String[] labels = new String[ExportSizes.OPTIONS.size() + 1];
+        labels[0] = getString(R.string.export_size_native);
+        for (int i = 0; i < ExportSizes.OPTIONS.size(); i++) labels[i + 1] = ExportSizes.OPTIONS.get(i) + " px";
+        Integer chosen = draft.exportSizes.get(member.packageName);
+        int selected = chosen == null ? 0 : ExportSizes.OPTIONS.indexOf(chosen) + 1;
+        exportSizeDialog = new AlertDialog.Builder(this).setTitle(member.label)
+                .setSingleChoiceItems(labels, selected, (dialog, which) -> {
+                    if (which == 0) draft.exportSizes.remove(member.packageName);
+                    else draft.exportSizes.put(member.packageName, ExportSizes.OPTIONS.get(which - 1));
+                    saveDraft(); refreshPacks(); refreshIconSizeInfo();
+                    dialog.dismiss();
+                }).setNegativeButton(android.R.string.cancel, null).show();
     }
 
     private int dragTarget(int from, float offset) {
@@ -2622,7 +2652,7 @@ public final class MainActivity extends Activity {
             Bitmap cover = null;
             Bitmap overlay = null, background = null, backdrop = null, shapeMask = null;
             try {
-                int iconSize = currentPack.iconSize();
+                int iconSize = new ExportSizes(currentPack, snapshot.exportSizes).maximum;
                 overlay = IconOverlay.load(this, snapshot.overlay, snapshot.overlayScale, iconSize);
                 background = IconBackground.load(this, snapshot.background, snapshot.backgroundScale, iconSize);
                 shapeMask = IconMask.load(this, snapshot.shapeFile, snapshot.maskScale, iconSize);
@@ -2641,7 +2671,7 @@ public final class MainActivity extends Activity {
                         cover, tree, null, snapshot.wallpaperPath.isEmpty() ? null
                                 : new File(getFilesDir(), snapshot.wallpaperPath), overlay, snapshot.overlayAll,
                         snapshot.overlayClip, background, snapshot.backgroundAll, snapshot.backgroundClip, shapeMask,
-                        snapshot.iconScale, snapshot.filters,
+                        snapshot.iconScale, snapshot.filters, snapshot.exportSizes,
                         (done, total) -> {
                             if (done == 1 || done == total || done % 10 == 0) runOnUiThread(() -> {
                                 if (!isDestroyed()) {
@@ -2675,16 +2705,24 @@ public final class MainActivity extends Activity {
             dialog.setMessage(getString(saved.theme().clearFolderBackground() ? R.string.export_done_full_theme
                     : R.string.export_done, "Honor/Themes/" + saved.theme().filename())
                     + "\n\n" + getString(R.string.export_display_title, saved.title())
-                    + "\n\n" + getString(R.string.template_saved, saved.template().name()));
+                    + "\n\n" + getString(R.string.template_saved, saved.template().name())
+                    + exportSizeMessage(saved.theme()));
         });
     }
 
     AlertDialog showExportResult(ThemeEngine.Result result) {
         exportDialog = new AlertDialog.Builder(this).setTitle(R.string.export_success)
                 .setMessage(getString(result.clearFolderBackground() ? R.string.export_done_full_theme
-                        : R.string.export_done, "Honor/Themes/" + result.filename()))
+                        : R.string.export_done, "Honor/Themes/" + result.filename()) + exportSizeMessage(result))
                 .setPositiveButton(R.string.open_themes, (dialog, which) -> openThemes()).show();
         return exportDialog;
+    }
+
+    private String exportSizeMessage(ThemeEngine.Result result) {
+        if (result.bytes() == 0) return "";
+        String size = android.text.format.Formatter.formatFileSize(this, result.bytes());
+        return "\n\n" + getString(R.string.export_file_size, size)
+                + (ExportSizes.oversized(result.bytes()) ? "\n\n" + getString(R.string.export_size_warning) : "");
     }
 
     static Intent themesIntent(android.content.pm.PackageManager pm) throws IOException {
@@ -2946,6 +2984,7 @@ public final class MainActivity extends Activity {
         if (cropDialog != null) cropDialog.dismiss();
         if (iconDialog != null) iconDialog.dismiss();
         if (exportDialog != null) exportDialog.dismiss();
+        if (exportSizeDialog != null) exportSizeDialog.dismiss();
         if (errorDialog != null) errorDialog.dismiss();
         if (deleteDialog != null) deleteDialog.dismiss();
         if (progressDialog != null) progressDialog.dismiss();

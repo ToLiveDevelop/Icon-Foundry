@@ -67,6 +67,10 @@ public final class DeviceTests extends Instrumentation {
 
     private void runChecks() throws Exception {
         Context context = getTargetContext();
+        if ("true".equals(arguments.getString("perPackResolutionOnly"))) {
+            verifyPerPackResolution(context);
+            return;
+        }
         if ("true".equals(arguments.getString("cleanup"))) {
             Files.deleteIfExists(new File(context.getExternalFilesDir(null), "reference.hnt").toPath());
             Files.deleteIfExists(new File(context.getExternalFilesDir(null), "device-check.hnt").toPath());
@@ -947,7 +951,7 @@ public final class DeviceTests extends Instrumentation {
                 IconRepository.Pack pack = (IconRepository.Pack) field(activity, "pack");
                 int size = pack.iconSize();
                 android.widget.TextView info = (android.widget.TextView) field(activity, "iconSizeInfo");
-                check(info.getText().toString().equals(activity.getString(R.string.icon_resolution, size, size)),
+                check(info.getText().toString().contains(size + " × " + size + " px"),
                         "Theme options show the detected pack icon resolution: " + info.getText());
             });
         } finally {
@@ -3748,6 +3752,206 @@ public final class DeviceTests extends Instrumentation {
         } catch (ReflectiveOperationException error) { throw new AssertionError(error); }
     }
 
+    private void verifyPerPackResolution(Context context) throws Exception {
+        IconRepository repository = new IconRepository(context);
+        IconRepository.Pack first = repository.load("com.maxpatchs.premium");
+        IconRepository.Pack second = repository.load("com.pressedprem.iconpack");
+        String firstName = first.icons.keySet().iterator().next();
+        String secondName = second.icons.keySet().iterator().next();
+        IconRepository.App a = new IconRepository.App(new ComponentName("dev.test.a", "dev.test.a.Main"), "A");
+        IconRepository.App b = new IconRepository.App(new ComponentName("dev.test.b", "dev.test.b.Main"), "B");
+        IconRepository.Pack smallA = new IconRepository.Pack(first.packageName, first.label, first.resources, first.badge, first.manager);
+        IconRepository.Pack smallB = new IconRepository.Pack(second.packageName, second.label, second.resources, second.badge, second.manager);
+        smallA.icons.put(firstName, first.icons.get(firstName));
+        smallA.mappings.put(a.key(), firstName);
+        smallB.icons.put(secondName, second.icons.get(secondName));
+        smallB.mappings.put(a.key(), secondName);
+        smallB.mappings.put(b.key(), secondName);
+        IconRepository.Pack combined = IconRepository.combine(List.of(smallA, smallB));
+        Draft d = new Draft();
+        d.packs.add(first.packageName); d.packs.add(second.packageName);
+        check(Draft.fromJson(d.toJson()).exportSizes.isEmpty(), "Legacy draft keeps per-pack native defaults");
+        ExportSizes nativeSizes = new ExportSizes(combined, Map.of());
+        check(nativeSizes.forIcon(combined.automatic(a), combined.packageName) == smallA.iconSize()
+                && nativeSizes.forIcon(combined.automatic(b), combined.packageName) == smallB.iconSize(),
+                "Native defaults use each winning source rather than combined maximum");
+        d.exportSizes.put(first.packageName, 256); d.exportSizes.put(second.packageName, 96);
+        check(Draft.fromJson(d.toJson()).exportSizes.equals(d.exportSizes), "Per-pack sizes round trip");
+        expectFailure(() -> Draft.fromJson(new org.json.JSONObject().put("exportSizes",
+                new org.json.JSONObject().put(first.packageName, 123))), "Unsupported resolution rejected");
+        for (Object bad : List.of("128", 128.5, true)) {
+            expectFailure(() -> Draft.fromJson(new org.json.JSONObject().put("exportSizes",
+                    new org.json.JSONObject().put(first.packageName, bad))), "Non-integer resolution rejected");
+        }
+        expectFailure(() -> Draft.fromJson(new org.json.JSONObject().put("exportSizes", 128)),
+                "Malformed resolution map rejected");
+        check(!ExportSizes.oversized(ExportSizes.WARNING_BYTES - 1)
+                && !ExportSizes.oversized(ExportSizes.WARNING_BYTES)
+                && ExportSizes.oversized(ExportSizes.WARNING_BYTES + 1), "Warning threshold is strictly above 290 MiB");
+        ExportSizes reversed = new ExportSizes(IconRepository.combine(List.of(smallB, smallA)), d.exportSizes);
+        check(reversed.forIcon(IconRepository.reference(first.packageName, firstName), second.packageName) == 256,
+                "Reorder preserves source settings");
+        File directory = Files.createTempDirectory(context.getCacheDir().toPath(), "pack-resolution-").toFile();
+        Context isolated = new android.content.ContextWrapper(context) {
+            @Override public File getFilesDir() { return directory; }
+        };
+        combined.fileIcons = FileIcons.directory(isolated);
+        Bitmap layer = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888);
+        layer.eraseColor(Color.argb(80, 0, 160, 240));
+        Bitmap fileImage = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888);
+        fileImage.eraseColor(Color.RED);
+        Bitmap mask = IconShape.CIRCLE.mask(170, null, null, 256);
+        Bitmap cover = null;
+        try {
+            TemplateStore store = new TemplateStore(isolated);
+            TemplateStore.Entry entry = store.save(d, combined.label, true);
+            Draft restored = store.open(entry.id());
+            check(restored.exportSizes.equals(d.exportSizes), "Template store preserves resolutions");
+            d.templateId = entry.id(); d.markSaved(context);
+            check(!d.hasUnsavedChanges(context), "Saved resolution fingerprint is stable");
+            d.exportSizes.put(second.packageName, 128);
+            check(d.hasUnsavedChanges(context), "Resolution changes mark draft unsaved");
+            String fileRef = FileIcons.save(isolated, fileImage);
+            IconRepository.App fileApp = new IconRepository.App(new ComponentName("dev.test.file", "dev.test.file.Main"), "File");
+            IconRepository.App external = new IconRepository.App(new ComponentName("dev.test.external", "dev.test.external.Main"), "External");
+            IconRepository.App manual = new IconRepository.App(new ComponentName("dev.test.manual", "dev.test.manual.Main"), "Manual");
+            IconRepository.App system = repository.apps().stream()
+                    .filter(app -> app.component().getPackageName().equals(context.getPackageName())).findFirst().orElseThrow();
+            Map<String, String> overrides = Map.of(fileApp.key(), fileRef,
+                    external.key(), IconRepository.reference(context.getPackageName(), "app_icon"),
+                    manual.key(), IconRepository.reference(second.packageName, secondName));
+            List<IconRepository.App> apps = List.of(a, b, fileApp, external, manual, system);
+            cover = ThemeEngine.cover(combined, apps, overrides);
+            IconFilters.Position position = new IconFilters.Position();
+            position.set(1, 10);
+            for (int chosen : ExportSizes.OPTIONS) for (boolean full : List.of(false, true)) {
+                Map<String, Integer> settings = Map.of(first.packageName, 256, second.packageName, chosen);
+                ExportSizes sizes = new ExportSizes(combined, settings);
+                Map<String, String> targets = ThemeEngine.exportTargets(apps, combined,
+                        ThemeEngine.withFilteredSystemIcons(apps, combined, overrides, List.of(position)), full);
+                Map<String, Integer> expected = new LinkedHashMap<>();
+                targets.forEach((key, value) -> expected.put(key + ".png", sizes.forIcon(value, combined.packageName)));
+                check(expected.get("dev.test.a.png") == 256 && expected.get("dev.test.b.png") == chosen
+                        && expected.get("dev.test.manual.png") == chosen && expected.get("dev.test.file.png") == 256
+                        && expected.get("dev.test.external.png") == 256, "Source resolution follows priority and manual source");
+                ThemeEngine.Built built = ThemeEngine.build(isolated, "Mixed resolution", full, IconShape.FILE,
+                        null, false, combined, apps, overrides, cover, null, layer, true, true,
+                        layer, true, true, mask, 75, List.of(position), settings, (done, total) -> {});
+                try (ZipFile zip = new ZipFile(built.file());
+                     ZipInputStream icons = new ZipInputStream(zip.getInputStream(zip.getEntry("icons")))) {
+                    int found = 0;
+                    for (ZipEntry icon; (icon = icons.getNextEntry()) != null;) {
+                        if (!icon.getName().endsWith(".png")) continue;
+                        byte[] bytes = icons.readAllBytes();
+                        Bitmap actual = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                        try {
+                            int size = expected.getOrDefault(icon.getName(), 256);
+                            check(actual != null && actual.getWidth() == size && actual.getHeight() == size,
+                                    "Mixed archive exact PNG dimensions: " + icon.getName());
+                            if (icon.getName().equals("dev.test.b.png")) {
+                                Bitmap wanted = IconRepository.Pack.scaleArtwork(combined.render(combined.automatic(b), chosen), 75);
+                                Bitmap background = IconBackground.render(layer, IconShape.FILE, null,
+                                        combined.fallbackSize(), true, mask);
+                                try {
+                                    IconOverlay.draw(wanted, layer, true);
+                                    IconBackground.draw(wanted, background);
+                                    check(actual.sameAs(wanted), "Small canvas preserves scale, clipping and fitted All layers");
+                                } finally { wanted.recycle(); background.recycle(); }
+                            }
+                            found++;
+                        } finally { if (actual != null) actual.recycle(); }
+                    }
+                    check(found == expected.size() + 3, "All targets and technical layers exported");
+                } finally { Files.delete(built.file().toPath()); }
+                expected.put("dev.test.b.png", chosen == 96 ? 128 : 96);
+                // A wrong per-target expectation must fail, even though both sizes are supported.
+                ThemeEngine.Built plain = ThemeEngine.build(isolated, "Strict resolution", full, IconShape.NONE,
+                        null, false, combined, apps, overrides, cover, null, null, false, true,
+                        null, false, true, null, 100, List.of(position), settings, (done, total) -> {});
+                try {
+                    expectFailure(() -> ThemeEngine.verifyArchive(plain.file(), expected.size(), IconShape.NONE,
+                            null, false, 170, false, null, null, null, 256, expected),
+                            "Archive validation rejects wrong target size");
+                } finally { Files.delete(plain.file().toPath()); }
+            }
+            check(!ThemeEngine.withFilteredSystemIcons(apps, combined, overrides, List.of()).containsKey(system.key()),
+                    "Neutral filters do not export system icons");
+            for (int chosen : ExportSizes.OPTIONS) {
+                ExportSizes single = new ExportSizes(first, Map.of(first.packageName, chosen));
+                check(single.maximum == chosen && single.forIcon(firstName, first.packageName) == chosen,
+                        "Single pack supports every explicit size");
+            }
+            verifySafReplacement(context, first);
+            verifyPerPackResolutionUi(context, smallA, smallB);
+        } finally {
+            layer.recycle(); fileImage.recycle(); mask.recycle();
+            if (cover != null) cover.recycle();
+            try (var files = Files.walk(directory.toPath())) {
+                for (var path : files.sorted(java.util.Comparator.reverseOrder()).toList()) Files.delete(path);
+            }
+        }
+    }
+
+    private void verifyPerPackResolutionUi(Context context, IconRepository.Pack first,
+                                           IconRepository.Pack second) throws Exception {
+        MainActivity activity = (MainActivity) startActivitySync(new android.content.Intent(context, MainActivity.class)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK));
+        try {
+            waitForWork(activity);
+            var build = MainActivity.class.getDeclaredMethod("buildScreen");
+            build.setAccessible(true);
+            Draft fixture = new Draft();
+            fixture.packs.add(first.packageName); fixture.packs.add(second.packageName);
+            fixture.exportSizes.put(second.packageName, 128);
+            runOnMainChecked(() -> {
+                setField(activity, "draft", fixture);
+                setField(activity, "pack", IconRepository.combine(List.of(first, second)));
+                @SuppressWarnings("unchecked")
+                List<IconRepository.Pack> packs = (List<IconRepository.Pack>) field(activity, "packs");
+                packs.clear(); packs.add(first); packs.add(second);
+                setField(activity, "editing", true);
+                build.invoke(activity);
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.view.View decor = activity.getWindow().getDecorView();
+                android.widget.Button button = (android.widget.Button) decor.findViewWithTag("export-size:" + second.packageName);
+                check(button.getText().toString().contains("128 px"), "Pack row restores chosen resolution");
+                button.performClick();
+                android.app.AlertDialog dialog = (android.app.AlertDialog) field(activity, "exportSizeDialog");
+                check(dialog.getListView().getAdapter().getCount() == 5, "Picker offers native and four fixed sizes");
+                dialog.getListView().performItemClick(null, 4, 4);
+                check(fixture.exportSizes.get(second.packageName) == 96 && Draft.load(activity).exportSizes.equals(fixture.exportSizes),
+                        "Choosing 96 saves pack resolution");
+                activity.movePack(1, 0);
+                check(fixture.packs.get(0).equals(second.packageName) && fixture.exportSizes.get(second.packageName) == 96,
+                        "UI reorder keeps resolution bound to source package");
+                decor.findViewWithTag("export-size:" + second.packageName).performClick();
+                dialog = (android.app.AlertDialog) field(activity, "exportSizeDialog");
+                dialog.dismiss();
+                check(fixture.exportSizes.get(second.packageName) == 96, "Cancel preserves selected size");
+                decor.findViewWithTag("export-size:" + second.packageName).performClick();
+                dialog = (android.app.AlertDialog) field(activity, "exportSizeDialog");
+                dialog.getListView().performItemClick(null, 0, 0);
+                check(!fixture.exportSizes.containsKey(second.packageName), "Native choice removes explicit setting");
+                fixture.exportSizes.put(second.packageName, 96);
+                activity.removePack(0);
+                check(!fixture.exportSizes.containsKey(second.packageName), "Removing pack clears its resolution");
+                android.app.AlertDialog warning = activity.showExportResult(new ThemeEngine.Result(Uri.EMPTY,
+                        1, "test.hnt", false, ExportSizes.WARNING_BYTES + 1));
+                check(((android.widget.TextView) warning.findViewById(android.R.id.message)).getText().toString()
+                        .contains(activity.getString(R.string.export_size_warning)), "Actual oversized result shows warning");
+                warning.dismiss();
+                android.app.AlertDialog normal = activity.showExportResult(new ThemeEngine.Result(Uri.EMPTY,
+                        1, "test.hnt", false, ExportSizes.WARNING_BYTES));
+                check(!((android.widget.TextView) normal.findViewById(android.R.id.message)).getText().toString()
+                        .contains(activity.getString(R.string.export_size_warning)), "Exact threshold does not warn");
+                normal.dismiss();
+            });
+            waitForThumbnails(activity);
+        } finally { runOnMainChecked(activity::finish); }
+    }
+
     private void verifyCrossPackAndTemplates(Context context, IconRepository repository, IconRepository.Pack pack,
                                               List<IconRepository.PackInfo> packs) throws Exception {
         IconRepository.PackInfo other = packs.stream().filter(info -> !info.packageName().equals(pack.packageName))
@@ -4279,13 +4483,21 @@ public final class DeviceTests extends Instrumentation {
         Bitmap cover = ThemeEngine.cover(pack, List.of(app), overrides);
         Uri created = null;
         try {
-            ThemeEngine.Result first = ThemeEngine.export(context, "Original", name, false, IconShape.NONE, false,
-                    pack, List.of(app), overrides, cover, tree, null, (done, total) -> {});
+            ThemeEngine.Result first = ThemeEngine.export(context, "Original", name, false, IconShape.NONE, null, false,
+                    pack, List.of(app), overrides, cover, tree, null, null, null, false, true,
+                    null, false, true, null, 100, List.of(), Map.of(pack.packageName, 96), (done, total) -> {});
             created = first.uri();
             check(ThemeEngine.findDocument(context.getContentResolver(), tree, name.toUpperCase(java.util.Locale.ROOT))
                     .equals(created), "Existing filename found case-insensitively through actual SAF provider");
             byte[] original;
             try (var input = context.getContentResolver().openInputStream(created)) { original = input.readAllBytes(); }
+            check(first.bytes() == original.length && first.bytes() > 0, "Export reports exact persisted file size");
+            File originalFile = File.createTempFile("saf-size-", ".hnt", context.getCacheDir());
+            try {
+                Files.write(originalFile.toPath(), original);
+                ThemeEngine.verifyArchive(originalFile, 1, IconShape.NONE, null, false, 170,
+                        false, null, null, null, 96);
+            } finally { Files.delete(originalFile.toPath()); }
             expectFailure(() -> ThemeEngine.export(context, "Unconfirmed", name, false, IconShape.NONE, true,
                     pack, List.of(app), overrides, cover, tree, null, (done, total) -> {}),
                     "Existing SAF theme cannot be overwritten without confirmation");
@@ -4299,6 +4511,7 @@ public final class DeviceTests extends Instrumentation {
             try {
                 try (var input = context.getContentResolver().openInputStream(created);
                      var output = new FileOutputStream(saved)) { input.transferTo(output); }
+                check(second.bytes() == saved.length(), "Replacement also reports exact persisted file size");
                 ThemeEngine.verifyArchive(saved, 1, IconShape.CIRCLE, true, pack.fallbackSize());
                 try (ZipFile zip = new ZipFile(saved)) {
                     String xml = new String(zip.getInputStream(zip.getEntry("description.xml")).readAllBytes(), StandardCharsets.UTF_8);

@@ -39,7 +39,11 @@ import java.util.zip.ZipOutputStream;
 
 final class ThemeEngine {
     record Format(String name, int layerSize, int iconSize, int contentSize) {}
-    record Result(Uri uri, int apps, String filename, boolean clearFolderBackground) {}
+    record Result(Uri uri, int apps, String filename, boolean clearFolderBackground, long bytes) {
+        Result(Uri uri, int apps, String filename, boolean clearFolderBackground) {
+            this(uri, apps, filename, clearFolderBackground, 0);
+        }
+    }
     record Built(File file, int apps) {}
     interface Progress { void update(int done, int total); }
     private static final long MAX_TEMPLATE = 256L * 1024 * 1024;
@@ -531,10 +535,22 @@ final class ThemeEngine {
                        boolean overlayClip, Bitmap background, boolean backgroundAll, boolean backgroundClip,
                        Bitmap shapeMask, int iconScale, List<IconFilters.Filter> filters,
                        Progress progress) throws Exception {
+        return build(context, title, fullPack, shape, corners, clearFolderBackground, pack, apps, overrides,
+                cover, wallpaper, overlay, overlayAll, overlayClip, background, backgroundAll, backgroundClip,
+                shapeMask, iconScale, filters, null, progress);
+    }
+
+    static Built build(Context context, String title, boolean fullPack, IconShape shape, int[] corners,
+                       boolean clearFolderBackground, IconRepository.Pack pack, List<IconRepository.App> apps,
+                       Map<String, String> overrides, Bitmap cover, File wallpaper, Bitmap overlay, boolean overlayAll,
+                       boolean overlayClip, Bitmap background, boolean backgroundAll, boolean backgroundClip,
+                       Bitmap shapeMask, int iconScale, List<IconFilters.Filter> filters,
+                       Map<String, Integer> exportSizes, Progress progress) throws Exception {
         if (iconScale < IconOverlay.MIN_SCALE || iconScale > IconOverlay.MAX_SCALE) {
             throw new IOException(App.text(R.string.icon_scale_invalid));
         }
-        int size = pack.iconSize();
+        ExportSizes sizes = exportSizes == null ? null : new ExportSizes(pack, exportSizes);
+        int size = sizes == null ? pack.iconSize() : sizes.maximum;
         Bitmap sizedOverlay = null, sizedBackground = null, sizedMask = null;
         try {
             if (overlay != null) {
@@ -551,7 +567,7 @@ final class ThemeEngine {
             }
             return buildSized(context, title, fullPack, shape, corners, clearFolderBackground, pack, apps, overrides,
                     cover, wallpaper, sizedOverlay, overlayAll, overlayClip, sizedBackground, backgroundAll,
-                    backgroundClip, sizedMask, size, iconScale, filters, progress);
+                    backgroundClip, sizedMask, size, iconScale, filters, sizes, progress);
         } finally {
             if (sizedOverlay != null && sizedOverlay != overlay) sizedOverlay.recycle();
             if (sizedBackground != null && sizedBackground != background) sizedBackground.recycle();
@@ -564,7 +580,7 @@ final class ThemeEngine {
                        Map<String, String> overrides, Bitmap cover, File wallpaper, Bitmap overlay, boolean overlayAll,
                        boolean overlayClip, Bitmap background, boolean backgroundAll, boolean backgroundClip,
                        Bitmap shapeMask, int iconSize, int iconScale, List<IconFilters.Filter> filters,
-                       Progress progress) throws Exception {
+                       ExportSizes sizes, Progress progress) throws Exception {
         if (shape == IconShape.FILE && shapeMask == null) throw new IOException(App.text(R.string.mask_file_missing));
         if (overlay != null) IconOverlay.validateRendered(overlay);
         if (background != null) IconBackground.validate(background);
@@ -585,7 +601,7 @@ final class ThemeEngine {
             }
             return build(context, title, shape, corners, clearFolderBackground, pack, cover,
                     wallpaper, overlay, border, overlayAll, overlayClip, backdrop, backgroundAll, shapeMask,
-                    targets, count, maskSize, iconSize, iconScale, filters, progress);
+                    targets, count, maskSize, iconSize, iconScale, filters, sizes, progress);
         } finally {
             if (border != null) border.recycle();
             if (backdrop != null) backdrop.recycle();
@@ -598,22 +614,25 @@ final class ThemeEngine {
                                boolean overlayClip, Bitmap background, boolean backgroundAll,
                                Bitmap shapeMask,
                                Map<String, String> targets, int count, int maskSize, int iconSize, int iconScale,
-                               List<IconFilters.Filter> filters, Progress progress) throws Exception {
+                               List<IconFilters.Filter> filters, ExportSizes sizes, Progress progress) throws Exception {
         byte[] wallpaperBytes = wallpaper == null ? null : java.nio.file.Files.readAllBytes(wallpaper.toPath());
         if (wallpaperBytes != null) verifyWallpaper(wallpaperBytes);
         File nested = File.createTempFile("icons-", ".zip", context.getCacheDir());
         File result = File.createTempFile("theme-", ".hnt", context.getCacheDir());
         boolean complete = false;
+        Map<String, Integer> expectedSizes = new java.util.LinkedHashMap<>();
         try {
             try (ZipOutputStream zip = new ZipOutputStream(new FileOutputStream(nested))) {
                 int done = 0;
                 for (var target : targets.entrySet()) {
                     if (!IconRepository.safeName(target.getKey())) throw new IOException(App.text(R.string.component_name_error));
                     boolean system = target.getValue().startsWith(SYSTEM_ICON);
+                    int targetSize = sizes == null ? iconSize : sizes.forIcon(target.getValue(), pack.packageName);
+                    expectedSizes.put(target.getKey() + ".png", targetSize);
                     Bitmap icon = system
                             ? systemIcon(context, target.getValue().substring(SYSTEM_ICON.length()), shape, corners,
                                     shapeMask, maskSize, iconSize, filters)
-                            : IconRepository.Pack.scaleArtwork(pack.render(target.getValue(), iconSize), iconScale);
+                            : IconRepository.Pack.scaleArtwork(pack.render(target.getValue(), targetSize), iconScale);
                     try {
                         if (system) {
                             // HONOR leaves theme PNGs untouched, so the fallback layers are baked in here.
@@ -662,7 +681,7 @@ final class ThemeEngine {
                 } finally { if (small != cover) small.recycle(); }
             }
             verifyArchive(result, targets.size(), shape, corners, clearFolderBackground, maskSize,
-                    wallpaper != null, border, background, shapeMask, iconSize);
+                    wallpaper != null, border, background, shapeMask, iconSize, expectedSizes);
             complete = true;
             return new Built(result, count);
         } finally {
@@ -743,13 +762,25 @@ final class ThemeEngine {
                          Uri replace, File wallpaper, Bitmap overlay, boolean overlayAll, boolean overlayClip,
                          Bitmap background, boolean backgroundAll, boolean backgroundClip, Bitmap shapeMask,
                          int iconScale, List<IconFilters.Filter> filters, Progress progress) throws Exception {
+        return export(context, title, filename, fullPack, shape, corners, clearFolderBackground, pack, apps,
+                overrides, cover, tree, replace, wallpaper, overlay, overlayAll, overlayClip, background,
+                backgroundAll, backgroundClip, shapeMask, iconScale, filters, null, progress);
+    }
+
+    static Result export(Context context, String title, String filename, boolean fullPack, IconShape shape,
+                         int[] corners, boolean clearFolderBackground, IconRepository.Pack pack,
+                         List<IconRepository.App> apps, Map<String, String> overrides, Bitmap cover, Uri tree,
+                         Uri replace, File wallpaper, Bitmap overlay, boolean overlayAll, boolean overlayClip,
+                         Bitmap background, boolean backgroundAll, boolean backgroundClip, Bitmap shapeMask,
+                         int iconScale, List<IconFilters.Filter> filters, Map<String, Integer> exportSizes,
+                         Progress progress) throws Exception {
         validateTree(context, tree);
         ContentResolver resolver = context.getContentResolver();
         Uri existing = findDocument(resolver, tree, filename);
         if (existing != null && !existing.equals(replace)) throw new IOException(context.getString(R.string.file_exists));
         Built built = build(context, title, fullPack, shape, corners, clearFolderBackground, pack, apps, overrides,
                 cover, wallpaper, overlay, overlayAll, overlayClip, background, backgroundAll, backgroundClip,
-                shapeMask, iconScale, filters, progress);
+                shapeMask, iconScale, filters, exportSizes, progress);
         File result = built.file();
         Uri created = null;
         try {
@@ -757,7 +788,7 @@ final class ThemeEngine {
             if (existing != null && !existing.equals(replace)) throw new IOException(context.getString(R.string.file_exists));
             if (existing != null) {
                 replaceVerified(context, existing, result);
-                return new Result(existing, built.apps(), filename, clearFolderBackground);
+                return new Result(existing, built.apps(), filename, clearFolderBackground, result.length());
             }
             Uri parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree));
             created = DocumentsContract.createDocument(resolver, parent, "application/octet-stream", filename);
@@ -772,7 +803,7 @@ final class ThemeEngine {
             try (InputStream input = require(resolver.openInputStream(created))) {
                 if (!MessageDigest.isEqual(expected, digest(input))) throw new IOException(App.text(R.string.integrity_error));
             }
-            return new Result(created, built.apps(), filename, clearFolderBackground);
+            return new Result(created, built.apps(), filename, clearFolderBackground, result.length());
         } catch (Exception error) {
             if (created != null) {
                 try {
@@ -1053,6 +1084,13 @@ final class ThemeEngine {
     static void verifyArchive(File file, int targetCount, IconShape shape, int[] corners, boolean clearFolderBackground,
                               int maskSize, boolean wallpaper, Bitmap overlay, Bitmap background, Bitmap shapeMask,
                               int iconSize) throws IOException {
+        verifyArchive(file, targetCount, shape, corners, clearFolderBackground, maskSize, wallpaper,
+                overlay, background, shapeMask, iconSize, null);
+    }
+
+    static void verifyArchive(File file, int targetCount, IconShape shape, int[] corners, boolean clearFolderBackground,
+                              int maskSize, boolean wallpaper, Bitmap overlay, Bitmap background, Bitmap shapeMask,
+                              int iconSize, Map<String, Integer> expectedSizes) throws IOException {
         if (shape == IconShape.FILE && shapeMask == null) throw new IOException(App.text(R.string.mask_file_missing));
         try (ZipFile zip = new ZipFile(file)) {
             if (zip.size() != (clearFolderBackground ? 7 : 6) + (wallpaper ? 3 : 0)
@@ -1099,6 +1137,7 @@ final class ThemeEngine {
                 boolean hasBackground = false;
                 boolean hasFolderGlass = false;
                 byte[] buffer = new byte[8192];
+                java.util.Set<String> seen = new java.util.HashSet<>();
                 for (ZipEntry entry; (entry = nested.getNextEntry()) != null;) {
                     String name = entry.getName();
                     if (name.equals("transparent_config.xml")) {
@@ -1155,7 +1194,8 @@ final class ThemeEngine {
                     BitmapFactory.Options bounds = new BitmapFactory.Options();
                     bounds.inJustDecodeBounds = true;
                     BitmapFactory.decodeStream(nested, null, bounds);
-                    if (bounds.outWidth != iconSize || bounds.outHeight != iconSize || !"image/png".equals(bounds.outMimeType)) {
+                    int expected = expectedSizes == null ? iconSize : expectedSizes.getOrDefault(name, -1);
+                    if (!seen.add(name) || bounds.outWidth != expected || bounds.outHeight != expected || !"image/png".equals(bounds.outMimeType)) {
                         throw new IOException(App.text(R.string.icon_image_invalid));
                     }
                     while (nested.read(buffer) != -1) { /* Validate CRC while streaming. */ }

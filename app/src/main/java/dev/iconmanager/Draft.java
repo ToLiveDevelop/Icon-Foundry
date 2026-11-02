@@ -13,6 +13,7 @@ final class Draft {
     String title = "";
     /** Base packs in priority order; the first one wins. */
     final List<String> packs = new ArrayList<>();
+    final Map<String, Integer> exportSizes = new LinkedHashMap<>();
     String tree = "";
     String coverPath = "";
     String wallpaperPath = "";
@@ -49,6 +50,15 @@ final class Draft {
         JSONArray packs = j.optJSONArray("packs");
         if (packs != null) for (int i = 0; i < packs.length(); i++) d.addPack(packs.getString(i));
         else if (!j.optString("pack").isEmpty()) d.addPack(j.optString("pack"));
+        JSONObject sizes = j.has("exportSizes") ? j.getJSONObject("exportSizes") : null;
+        if (sizes != null) for (var keys = sizes.keys(); keys.hasNext();) {
+            String key = keys.next();
+            Object value = sizes.get(key);
+            if (!(value instanceof Integer size) || !IconRepository.safeName(key) || !ExportSizes.valid(size)) {
+                throw new JSONException(App.text(R.string.export_size_invalid));
+            }
+            d.exportSizes.put(key, size);
+        }
         d.tree = j.optString("tree");
         d.coverPath = j.optString("coverPath");
         d.wallpaperPath = j.optString("wallpaperPath");
@@ -174,6 +184,7 @@ final class Draft {
                 .put("overrides", new JSONObject(overrides));
         // A single pack keeps the original format, so older templates and fingerprints stay identical.
         if (packs.size() > 1) j.put("packs", new JSONArray(packs));
+        if (!exportSizes.isEmpty()) j.put("exportSizes", new JSONObject(new java.util.TreeMap<>(exportSizes)));
         if (systemIcons) j.put("systemIcons", true);
         if (!overlay.isEmpty()) j.put("overlay", overlay).put("overlayAll", overlayAll);
         if (!overlay.isEmpty() && overlayScale != 100) j.put("overlayScale", overlayScale);
