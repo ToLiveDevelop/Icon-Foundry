@@ -30,10 +30,13 @@
     <string name="choose_background">Choose PNG</string>
     <string name="remove_background">Remove background</string>
     <string name="use_background">Use background</string>
-    <string name="background_preview">Background preview under an icon</string>
-    <string name="background_help">A square PNG up to 4096 × 4096 px. Opaque or transparent images are supported; the source resolution is preserved in the template. Export resolution matches the predominant icon size of the selected packs (shown in Theme options). The background appears behind the icon, through transparent areas; it does not replace the existing icon background. Adjust scale and clipping in Choose shape. All mode also adds it to pack and file icons.</string>
+    <string name="background_settings">Background settings</string>
+    <string name="background_example_system">System icons</string>
+    <string name="background_example_pack">Icon pack icons</string>
+    <string name="background_example_missing">No matching application</string>
+    <string name="background_help">A square PNG up to 4096 × 4096 px. Opaque or transparent images are supported; the source resolution is preserved in the template. Export resolution matches the predominant icon size of the selected packs (shown in Theme options). The background appears behind the icon, through transparent areas; it does not replace the existing icon background. After choosing the file, adjust background scale, icon scale, clipping and scope on three system icons and three pack icons. Use Background settings to reopen this window. Icon scale affects pack and manually chosen icons only. Background scale and clipping are also in Choose shape. All mode also adds the background to pack and file icons.</string>
     <string name="background_scale">Background scale: %1$d%%</string>
-    <string name="background_scale_help" formatted="false">50–150%, centred on the icon canvas. Export resolution matches the predominant icon size of the selected packs (shown in Theme options). The preview updates immediately. Tap Apply to save; the original PNG is unchanged.</string>
+    <string name="background_scale_help" formatted="false">50–150%, centred on the icon canvas. Export resolution matches the predominant icon size of the selected packs (shown in Theme options). The preview updates immediately. Tap Apply or Use background to save; the original PNG is unchanged.</string>
     <string name="background_scale_invalid" formatted="false">Background scale must be between 50% and 150%.</string>
     <string name="background_clip">Clip background to shape</string>
     <string name="background_clip_help">Hides the background outside the selected shape. Without a shape, the PNG keeps its own outline. Pack and file icons themselves are not cropped.</string>
@@ -240,6 +243,7 @@
     <string name="folder_setting_error">"Invalid folder preview background setting."</string>
     <string name="folder_module_error">"Invalid folder preview background module."</string>
     <string name="folder_module_incomplete">"Incomplete folder preview background module."</string>
+    <string name="folder_glass_error">"Invalid folder glass compatibility settings in the theme."</string>
     <string name="mask_unexpected">"Unexpected icon mask."</string>
     <string name="mask_read_error">"Cannot read the icon mask."</string>
     <string name="mask_size_error">"Invalid mask size."</string>

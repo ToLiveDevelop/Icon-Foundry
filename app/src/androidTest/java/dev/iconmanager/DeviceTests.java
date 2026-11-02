@@ -387,7 +387,7 @@ public final class DeviceTests extends Instrumentation {
                 boolean dimensions = true;
                 for (ZipEntry entry; (entry = icons.getNextEntry()) != null;) {
                     byte[] bytes = icons.readAllBytes();
-                    if (entry.getName().equals("icon_mask.png")) continue;
+                    if (entry.getName().equals("icon_mask.png") || entry.getName().equals("transparent_config.xml")) continue;
                     names.add(entry.getName());
                     Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
                     dimensions &= bitmap != null && bitmap.getWidth() == 192 && bitmap.getHeight() == 192;
@@ -917,7 +917,6 @@ public final class DeviceTests extends Instrumentation {
         isolated.iconScale = 100;
         var build = MainActivity.class.getDeclaredMethod("buildScreen");
         build.setAccessible(true);
-        Bitmap[] initial = new Bitmap[1];
         try {
             runOnMainChecked(() -> {
                 setField(activity, "draft", isolated);
@@ -926,47 +925,17 @@ public final class DeviceTests extends Instrumentation {
             waitForThumbnails(activity);
             runOnMainChecked(() -> {
                 android.view.View decor = activity.getWindow().getDecorView();
-                android.widget.SeekBar slider = decor.findViewWithTag("icon-scale");
-                check(slider != null && slider.getProgress() == 100 && slider.getMin() == IconOverlay.MIN_SCALE
-                                && slider.getMax() == IconOverlay.MAX_SCALE,
-                        "Theme options expose a 50–150% icon scale slider");
-                check(decor.findViewWithTag("help-icon_scale_help") != null, "Icon scale has its help button");
+                check(decor.findViewWithTag("icon-scale") == null,
+                        "Icon scale is no longer duplicated in theme options");
+                check(decor.findViewWithTag("background-settings").getVisibility() == android.view.View.GONE,
+                        "Background settings are hidden without a selected background");
                 IconRepository.Pack pack = (IconRepository.Pack) field(activity, "pack");
                 int size = pack.iconSize();
                 android.widget.TextView info = (android.widget.TextView) field(activity, "iconSizeInfo");
                 check(info.getText().toString().equals(activity.getString(R.string.icon_resolution, size, size)),
                         "Theme options show the detected pack icon resolution: " + info.getText());
-                android.widget.ImageView preview = (android.widget.ImageView) field(activity, "iconScalePreview");
-                android.widget.LinearLayout.LayoutParams previewParams =
-                        (android.widget.LinearLayout.LayoutParams) ((android.view.View) preview.getParent()).getLayoutParams();
-                check(previewParams.bottomMargin >= Math.round(12 * activity.getResources().getDisplayMetrics().density),
-                        "Icon scale preview has at least 12dp spacing before the slider arrows");
-                int[] previewPosition = new int[2], arrowPosition = new int[2];
-                preview.getLocationInWindow(previewPosition);
-                decor.findViewWithTag("icon-scale-decrease").getLocationInWindow(arrowPosition);
-                check(arrowPosition[1] - previewPosition[1] - preview.getHeight()
-                                >= Math.round(12 * activity.getResources().getDisplayMetrics().density),
-                        "Rendered icon scale preview stays at least 12dp above the decrease button");
-                check(preview.getDrawable() instanceof android.graphics.drawable.BitmapDrawable,
-                        "Icon scale preview shows a pack icon");
-                initial[0] = ((android.graphics.drawable.BitmapDrawable) preview.getDrawable()).getBitmap()
-                        .copy(Bitmap.Config.ARGB_8888, false);
-                decor.findViewWithTag("icon-scale-increase").performClick();
-                check(slider.getProgress() == 101 && isolated.iconScale == 101
-                                && activity.getSharedPreferences("draft", 0).getString("json", "").contains("\"iconScale\":101"),
-                        "Icon scale arrow changes and saves the draft immediately");
-                for (int i = 0; i < 41; i++) decor.findViewWithTag("icon-scale-decrease").performClick();
-                check(isolated.iconScale == 60, "Icon scale arrows reach 60%");
-            });
-            waitForThumbnails(activity);
-            runOnMainChecked(() -> {
-                android.widget.ImageView preview = (android.widget.ImageView) field(activity, "iconScalePreview");
-                Bitmap scaled = ((android.graphics.drawable.BitmapDrawable) preview.getDrawable()).getBitmap();
-                check(opaquePixels(scaled) < opaquePixels(initial[0]) * 0.6,
-                        "Icon scale preview shrinks the pack icon artwork");
             });
         } finally {
-            if (initial[0] != null) initial[0].recycle();
             runOnMainChecked(() -> {
                 setField(activity, "draft", original);
                 original.save(activity);
@@ -1124,20 +1093,102 @@ public final class DeviceTests extends Instrumentation {
                                 == android.view.View.GONE, "Empty background card starts collapsed");
                 check(((android.view.View) field(activity, "backgroundScope")).getVisibility() == android.view.View.GONE,
                         "Background scope is hidden before import");
+                isolated.save(activity);
                 Bitmap image = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
                 image.eraseColor(android.graphics.Color.GREEN);
                 var preview = MainActivity.class.getDeclaredMethod("previewBackground", Bitmap.class);
                 preview.setAccessible(true); preview.invoke(activity, image);
                 android.app.Dialog dialog = (android.app.Dialog) field(activity, "backgroundDialog");
                 check(dialog.isShowing(), "Background import shows a confirmation preview");
-                findText(dialog.getWindow().getDecorView(), activity.getString(R.string.use_background)).performClick();
+                android.view.View decor = dialog.getWindow().getDecorView();
+                check(decor.findViewWithTag("background-scale") != null && decor.findViewWithTag("background-clip") != null
+                                && decor.findViewWithTag("background-import-scope") != null
+                                && decor.findViewWithTag("icon-scale") != null,
+                        "Background import offers background scale, icon scale, clipping and scope");
+            });
+            waitForThumbnails(activity);
+            Bitmap[] importedBefore = new Bitmap[2];
+            runOnMainChecked(() -> {
+                android.view.View decor = ((android.app.Dialog) field(activity, "backgroundDialog")).getWindow().getDecorView();
+                for (String type : List.of("system", "pack")) for (int i = 0; i < 3; i++) {
+                    android.widget.ImageView image = decor.findViewWithTag("background-example-" + type + "-" + i);
+                    check(image != null && image.getDrawable() instanceof android.graphics.drawable.BitmapDrawable,
+                            "Background import previews " + type + " icon " + i);
+                }
+                android.widget.ImageView system = decor.findViewWithTag("background-example-system-0");
+                Bitmap shown = ((android.graphics.drawable.BitmapDrawable) system.getDrawable()).getBitmap();
+                importedBefore[0] = shown.copy(Bitmap.Config.ARGB_8888, false);
+                android.widget.SeekBar scale = decor.findViewWithTag("background-scale");
+                scale.setProgress(60);
+                scale.onKeyDown(android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                        new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_LEFT));
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "backgroundDialog");
+                android.view.View decor = dialog.getWindow().getDecorView();
+                android.widget.ImageView system = decor.findViewWithTag("background-example-system-0");
+                Bitmap shown = ((android.graphics.drawable.BitmapDrawable) system.getDrawable()).getBitmap();
+                check(!shown.sameAs(importedBefore[0]), "Background import scale updates the examples");
+                importedBefore[0].recycle();
+                importedBefore[0] = shown.copy(Bitmap.Config.ARGB_8888, false);
+                android.widget.ImageView packed = decor.findViewWithTag("background-example-pack-0");
+                importedBefore[1] = ((android.graphics.drawable.BitmapDrawable) packed.getDrawable()).getBitmap()
+                        .copy(Bitmap.Config.ARGB_8888, false);
+                var previous = packed.getDrawable();
+                for (int i = 0; i < 40; i++) {
+                    decor.findViewWithTag("icon-scale-decrease").performClick();
+                    check(packed.getDrawable() == previous, "Icon scale keeps the rendered icon while waiting: " + i);
+                }
+                check(isolated.iconScale == 100 && Draft.load(activity).iconScale == 100,
+                        "Icon scale stays local until background confirmation");
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "backgroundDialog");
+                android.view.View decor = dialog.getWindow().getDecorView();
+                android.widget.ImageView system = decor.findViewWithTag("background-example-system-0");
+                android.widget.ImageView packed = decor.findViewWithTag("background-example-pack-0");
+                check(((android.graphics.drawable.BitmapDrawable) system.getDrawable()).getBitmap().sameAs(importedBefore[0]),
+                        "Pack icon scale does not resize system fallback icons");
+                check(opaquePixels(((android.graphics.drawable.BitmapDrawable) packed.getDrawable()).getBitmap())
+                                < opaquePixels(importedBefore[1]) * .6,
+                        "Background dialog icon scale shrinks pack artwork");
+                for (Bitmap image : importedBefore) image.recycle();
+                ((android.widget.SeekBar) decor.findViewWithTag("background-scale")).setProgress(100);
+                ((android.widget.SeekBar) decor.findViewWithTag("background-scale")).onKeyDown(
+                        android.view.KeyEvent.KEYCODE_DPAD_RIGHT, new android.view.KeyEvent(
+                                android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_RIGHT));
+                ((android.widget.SeekBar) decor.findViewWithTag("background-scale")).onKeyDown(
+                        android.view.KeyEvent.KEYCODE_DPAD_LEFT, new android.view.KeyEvent(
+                                android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_LEFT));
+                findText(decor, activity.getString(R.string.use_background)).performClick();
             });
             waitForWork(activity);
             runOnMainChecked(() -> {
-                check(FileIcons.isFile(isolated.background) && !isolated.backgroundAll,
-                        "Confirmed background is saved with fallback-only scope");
+                check(FileIcons.isFile(isolated.background) && !isolated.backgroundAll && isolated.backgroundScale == 100,
+                        "Confirmed background is saved with fallback-only scope and chosen scale");
+                check(isolated.iconScale == 60 && Draft.load(activity).iconScale == 60,
+                        "Confirming the background saves icon scale");
                 check(((android.view.View) field(field(activity, "backgroundSection"), "content")).getVisibility()
                                 == android.view.View.VISIBLE, "Selecting a background expands its card");
+                android.view.View settings = activity.getWindow().getDecorView().findViewWithTag("background-settings");
+                check(settings.getVisibility() == android.view.View.VISIBLE, "Selected background exposes its settings button");
+                settings.performClick();
+            });
+            waitForWork(activity);
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "backgroundDialog");
+                android.view.View decor = dialog.getWindow().getDecorView();
+                check(((android.widget.SeekBar) decor.findViewWithTag("icon-scale")).getProgress() == 60
+                                && ((android.widget.SeekBar) decor.findViewWithTag("background-scale")).getProgress() == 100,
+                        "Settings reopen the same background dialog with saved scales");
+                decor.findViewWithTag("icon-scale-increase").performClick();
+                decor.findViewWithTag("background-scale-decrease").performClick();
+                dialog.dismiss();
+                check(isolated.iconScale == 60 && isolated.backgroundScale == 100,
+                        "Dismissing background settings discards both scale changes");
                 ((android.view.View) field(activity, "shapeButton")).performClick();
             });
             waitForThumbnails(activity);
@@ -1234,6 +1285,8 @@ public final class DeviceTests extends Instrumentation {
                 check(isolated.background.isEmpty() && !isolated.backgroundAll && isolated.backgroundClip
                                 && isolated.backgroundScale == 100 && !isolated.toJson().has("background"),
                         "Removing a background clears its reference and resets related settings");
+                check(activity.getWindow().getDecorView().findViewWithTag("background-settings").getVisibility()
+                                == android.view.View.GONE, "Removing a background hides its settings button");
                 ((android.view.View) field(activity, "shapeButton")).performClick();
             });
             waitForThumbnails(activity);
@@ -1291,7 +1344,8 @@ public final class DeviceTests extends Instrumentation {
                 });
                 waitForThumbnails(activity);
                 Bitmap mask = draftMask(activity, draft);
-                Bitmap[] expected = {source.render(iconName, 128), pack.render(fileReference, 128),
+                Bitmap[] expected = {IconRepository.Pack.scaleArtwork(source.render(iconName, 128), draft.iconScale),
+                        IconRepository.Pack.scaleArtwork(pack.render(fileReference, 128), draft.iconScale),
                         draft.shape.preview(IconRepository.unthemedIcon(activity.getPackageManager(), app.component()),
                                 pack.fallbackSize(), draft.corners, mask)};
                 Bitmap background = IconBackground.load(activity, draft.background, draft.backgroundScale);
@@ -1329,7 +1383,8 @@ public final class DeviceTests extends Instrumentation {
             if (pickerMask != null) pickerMask.recycle();
             try {
                 runOnMainChecked(() -> {
-                    Bitmap expected = choice[0].source().render(choice[0].icon().name(), 128);
+                    Bitmap expected = IconRepository.Pack.scaleArtwork(
+                            choice[0].source().render(choice[0].icon().name(), 128), draft.iconScale);
                     IconBackground.draw(expected, backdrop);
                     try { check(((android.graphics.drawable.BitmapDrawable) pickerImage[0].getDrawable()).getBitmap().sameAs(expected),
                             "Manual icon catalogue displays the selected background"); }
@@ -1344,7 +1399,7 @@ public final class DeviceTests extends Instrumentation {
                     android.app.Dialog dialog = (android.app.Dialog) field(activity, "fileIconDialog");
                     android.view.ViewGroup content = (android.view.ViewGroup) dialog.findViewById(android.R.id.content);
                     android.widget.ImageView image = (android.widget.ImageView) ((android.view.ViewGroup) content.getChildAt(0)).getChildAt(1);
-                    Bitmap expected = file.copy(Bitmap.Config.ARGB_8888, true);
+                    Bitmap expected = IconRepository.Pack.scaleArtwork(file.copy(Bitmap.Config.ARGB_8888, true), draft.iconScale);
                     IconBackground.draw(expected, backdrop);
                     try { check(((android.graphics.drawable.BitmapDrawable) image.getDrawable()).getBitmap().sameAs(expected),
                             "File import preview displays the background under the original icon"); }
@@ -1687,6 +1742,7 @@ public final class DeviceTests extends Instrumentation {
                         int entries = 0;
                         for (var entry = icons.getNextEntry(); entry != null; entry = icons.getNextEntry()) {
                             byte[] bytes = icons.readAllBytes();
+                            if (entry.getName().equals("transparent_config.xml")) continue;
                             BitmapFactory.Options bounds = new BitmapFactory.Options();
                             bounds.inJustDecodeBounds = true;
                             BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
@@ -1708,6 +1764,7 @@ public final class DeviceTests extends Instrumentation {
                      var icons = new java.util.zip.ZipInputStream(zip.getInputStream(zip.getEntry("icons")))) {
                     for (var entry = icons.getNextEntry(); entry != null; entry = icons.getNextEntry()) {
                         byte[] bytes = icons.readAllBytes();
+                        if (entry.getName().equals("transparent_config.xml")) continue;
                         BitmapFactory.Options bounds = new BitmapFactory.Options();
                         bounds.inJustDecodeBounds = true;
                         BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
@@ -1723,7 +1780,7 @@ public final class DeviceTests extends Instrumentation {
                     int checked = 0;
                     for (var entry = icons.getNextEntry(); entry != null; entry = icons.getNextEntry()) {
                         byte[] bytes = icons.readAllBytes();
-                        if (entry.getName().startsWith("icon_")) continue;
+                        if (entry.getName().startsWith("icon_") || entry.getName().equals("transparent_config.xml")) continue;
                         Bitmap actual = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
                         try {
                             check(actual.getWidth() == size && Color.alpha(actual.getPixel(size / 5, size / 2)) == 0
@@ -1757,6 +1814,7 @@ public final class DeviceTests extends Instrumentation {
                                  var icons = new java.util.zip.ZipInputStream(zip.getInputStream(zip.getEntry("icons")))) {
                                 for (var entry = icons.getNextEntry(); entry != null; entry = icons.getNextEntry()) {
                                     byte[] bytes = icons.readAllBytes();
+                                    if (entry.getName().equals("transparent_config.xml")) continue;
                                     Bitmap actual = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
                                     check(actual != null, "Export entry is a readable PNG");
                                     try {
@@ -1967,6 +2025,7 @@ public final class DeviceTests extends Instrumentation {
                             pack, List.of(app), overrides, cover, null, overlay, all, (done, total) -> {});
                     try (ZipFile archive = new ZipFile(built.file());
                          ZipInputStream icons = new ZipInputStream(archive.getInputStream(archive.getEntry("icons")))) {
+                        verifyFolderGlass(built.file());
                         boolean found = false;
                         for (ZipEntry entry; (entry = icons.getNextEntry()) != null;) {
                             if (!entry.getName().equals(app.component().getPackageName() + ".png")) continue;
@@ -2501,6 +2560,21 @@ public final class DeviceTests extends Instrumentation {
                         List.of(app), Map.of(app.key(), icon), cover, (done, total) -> {});
                 try {
                     ThemeEngine.verifyArchive(built.file(), 1, shape, clearFolderBackground, pack.fallbackSize());
+                    verifyFolderGlass(built.file());
+                    if (shape == IconShape.NONE) {
+                        for (String replacement : new String[]{null, "<HnTheme><transparent>true</transparent></HnTheme>"}) {
+                            File altered = replaceFolderGlass(context, built.file(), replacement);
+                            try {
+                                try {
+                                    ThemeEngine.verifyArchive(altered, 1, shape, clearFolderBackground, pack.fallbackSize());
+                                    throw new AssertionError("Invalid folder glass metadata was accepted");
+                                } catch (java.io.IOException error) {
+                                    check(App.text(R.string.folder_glass_error).equals(error.getMessage()),
+                                            "Missing or altered folder glass metadata fails explicitly");
+                                }
+                            } finally { Files.deleteIfExists(altered.toPath()); }
+                        }
+                    }
                     try (ZipFile zip = new ZipFile(built.file())) {
                         check((zip.getEntry(ThemeEngine.LAUNCHER) != null) == clearFolderBackground,
                                 "Folder background override appears only when enabled");
@@ -2510,6 +2584,7 @@ public final class DeviceTests extends Instrumentation {
                         boolean hasMask = false;
                         for (ZipEntry entry; (entry = icons.getNextEntry()) != null;) {
                             byte[] bytes = icons.readAllBytes();
+                            if (entry.getName().equals("transparent_config.xml")) continue;
                             Bitmap actual = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
                             try {
                                 if (entry.getName().equals("icon_mask.png")) {
@@ -3236,14 +3311,81 @@ public final class DeviceTests extends Instrumentation {
             }
             check(paths.equals(java.util.Set.of("theme.xml", "night/theme.xml")),
                     "Folder fix applies only to launcher in day and night modes");
-            try (ZipInputStream icons = new ZipInputStream(zip.getInputStream(zip.getEntry("icons")))) {
-                boolean hasFolderBackground = false;
-                for (ZipEntry entry; (entry = icons.getNextEntry()) != null;) {
-                    hasFolderBackground |= entry.getName().equals("portal_ring_inner_holo.png")
-                            || entry.getName().equals("portal_ring_inner_holo_dark.png");
+        }
+        verifyFolderGlass(file);
+    }
+
+    private void verifyFolderGlass(File file) throws Exception {
+        try (ZipFile zip = new ZipFile(file);
+             ZipInputStream icons = new ZipInputStream(zip.getInputStream(zip.getEntry("icons")))) {
+            int configurations = 0;
+            boolean hasFolderBackground = false;
+            Map<String, String> flags = new LinkedHashMap<>();
+            for (ZipEntry entry; (entry = icons.getNextEntry()) != null;) {
+                String name = entry.getName();
+                hasFolderBackground |= name.equals("portal_ring_inner_holo.png")
+                        || name.equals("portal_ring_inner_holo_dark.png")
+                        || name.equals("folder_path.svg") || name.startsWith("icon_folders/")
+                        || name.startsWith("folder_paths/");
+                if (!name.equals("transparent_config.xml")) continue;
+                configurations++;
+                org.xmlpull.v1.XmlPullParser xml = android.util.Xml.newPullParser();
+                xml.setInput(new java.io.ByteArrayInputStream(icons.readAllBytes()), "UTF-8");
+                boolean root = false;
+                for (int event = xml.next(); event != org.xmlpull.v1.XmlPullParser.END_DOCUMENT; event = xml.next()) {
+                    if (event != org.xmlpull.v1.XmlPullParser.START_TAG) continue;
+                    if (xml.getName().equals("HnTheme")) root = true;
+                    else {
+                        String flag = xml.getName();
+                        check((flag.equals("transparent") || flag.equals("highlight")) && !flags.containsKey(flag),
+                                "Folder glass configuration has only distinct supported flags");
+                        flags.put(flag, xml.nextText());
+                    }
                 }
-                check(!hasFolderBackground, "Export does not replace the collapsed folder background");
+                check(root, "Folder glass configuration uses the HONOR theme root");
             }
+            check(configurations == 1 && flags.equals(Map.of("transparent", "false", "highlight", "true")),
+                    "Icon theme enables folder glass without transparent icon mode");
+            check(!hasFolderBackground, "Export does not replace the small folder background or path");
+        }
+    }
+
+    private File replaceFolderGlass(Context context, File file, String replacement) throws Exception {
+        File result = File.createTempFile("folder-glass-check-", ".hnt", context.getCacheDir());
+        boolean complete = false, found = false;
+        try {
+            try (ZipFile original = new ZipFile(file);
+                 ZipOutputStream output = new ZipOutputStream(new FileOutputStream(result))) {
+                var entries = original.entries();
+                while (entries.hasMoreElements()) {
+                    ZipEntry entry = entries.nextElement();
+                    output.putNextEntry(new ZipEntry(entry.getName()));
+                    if (entry.getName().equals("icons")) {
+                        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+                        try (ZipInputStream icons = new ZipInputStream(original.getInputStream(entry));
+                             ZipOutputStream changed = new ZipOutputStream(bytes)) {
+                            for (ZipEntry icon; (icon = icons.getNextEntry()) != null;) {
+                                boolean config = icon.getName().equals("transparent_config.xml");
+                                found |= config;
+                                if (config && replacement == null) continue;
+                                changed.putNextEntry(new ZipEntry(icon.getName()));
+                                if (config) changed.write(replacement.getBytes(StandardCharsets.UTF_8));
+                                else icons.transferTo(changed);
+                                changed.closeEntry();
+                            }
+                        }
+                        output.write(bytes.toByteArray());
+                    } else {
+                        try (var input = original.getInputStream(entry)) { input.transferTo(output); }
+                    }
+                    output.closeEntry();
+                }
+            }
+            if (!found) throw new AssertionError("Original archive is missing folder glass metadata");
+            complete = true;
+            return result;
+        } finally {
+            if (!complete) Files.deleteIfExists(result.toPath());
         }
     }
 

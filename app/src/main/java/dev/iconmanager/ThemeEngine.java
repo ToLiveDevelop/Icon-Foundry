@@ -48,6 +48,8 @@ final class ThemeEngine {
     static final String LAUNCHER = "com.hihonor.android.launcher";
     private static final String FOLDER_COLORS = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
             + "<resources><color name=\"magic_gray_4\">#00000000</color></resources>\n";
+    private static final String FOLDER_GLASS = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            + "<HnTheme><transparent>false</transparent><highlight>true</highlight></HnTheme>";
 
     static Format inspect(Context context, Uri uri) throws Exception {
         File theme = File.createTempFile("sample-", ".hnt", context.getCacheDir());
@@ -578,6 +580,8 @@ final class ThemeEngine {
                     try { put(zip, "icon_mask.png", png(mask)); }
                     finally { mask.recycle(); }
                 }
+                // HONOR uses highlight support to retain dynamic blur for small folders.
+                put(zip, "transparent_config.xml", FOLDER_GLASS.getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 if (border != null) put(zip, "icon_border.png", png(border));
                 if (background != null) put(zip, "icon_background.png", png(background));
             }
@@ -1029,9 +1033,18 @@ final class ThemeEngine {
                 boolean hasMask = false;
                 boolean hasOverlay = false;
                 boolean hasBackground = false;
+                boolean hasFolderGlass = false;
                 byte[] buffer = new byte[8192];
                 for (ZipEntry entry; (entry = nested.getNextEntry()) != null;) {
                     String name = entry.getName();
+                    if (name.equals("transparent_config.xml")) {
+                        if (hasFolderGlass || !FOLDER_GLASS.equals(new String(
+                                nested.readNBytes(4096), java.nio.charset.StandardCharsets.UTF_8))) {
+                            throw new IOException(App.text(R.string.folder_glass_error));
+                        }
+                        hasFolderGlass = true;
+                        continue;
+                    }
                     if (name.equals("icon_background.png")) {
                         if (hasBackground || background == null) throw new IOException(App.text(R.string.background_archive_error));
                         byte[] bytes = nested.readNBytes(iconSize * iconSize * 4 + 65536);
@@ -1085,6 +1098,7 @@ final class ThemeEngine {
                     count++;
                 }
                 if (count != targetCount) throw new IOException(App.text(R.string.icons_incomplete));
+                if (!hasFolderGlass) throw new IOException(App.text(R.string.folder_glass_error));
                 if (hasMask != (shape != IconShape.NONE)) throw new IOException(App.text(R.string.mask_missing));
                 if (hasOverlay != (overlay != null)) throw new IOException(App.text(R.string.overlay_archive_error));
                 if (hasBackground != (background != null)) throw new IOException(App.text(R.string.background_archive_error));

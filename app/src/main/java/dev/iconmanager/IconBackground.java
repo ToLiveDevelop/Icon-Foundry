@@ -25,7 +25,15 @@ final class IconBackground {
 
     static Bitmap load(Context context, String reference, int scale, int size) throws IOException {
         if (reference.isEmpty()) return null;
-        Bitmap bitmap = FileIcons.render(FileIcons.directory(context), reference, size);
+        return finish(FileIcons.render(FileIcons.directory(context), reference, size), scale);
+    }
+
+    /** Prepares an imported, not yet saved PNG exactly like a stored background. */
+    static Bitmap prepare(Bitmap source, int scale) throws IOException {
+        return finish(FileIcons.fit(source, IconShape.SIZE), scale);
+    }
+
+    private static Bitmap finish(Bitmap bitmap, int scale) throws IOException {
         try {
             validate(bitmap);
             if (scale == 100) return bitmap;
