@@ -19,6 +19,7 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -76,6 +77,7 @@ final class IconRepository {
         final Set<String> unavailable = new LinkedHashSet<>();
         final List<Pack> members = new ArrayList<>();
         private Integer fallbackSize;
+        private Integer iconSize;
         java.io.File fileIcons;
 
         Pack(String packageName, String label, Resources resources, Bitmap badge, PackageManager manager) {
@@ -129,6 +131,69 @@ final class IconRepository {
             return automatic(app);
         }
 
+        /**
+         * Predominant canvas of the appfilter icons; combined packs use the largest member canvas.
+         * Single oversized or non-square resources (for example 256x276) do not change the export size.
+         */
+        synchronized int iconSize() throws IOException {
+            if (iconSize != null) return iconSize;
+            int result = 0;
+            if (!members.isEmpty()) {
+                for (Pack member : members) result = Math.max(result, member.iconSize());
+            } else {
+                Set<Integer> seen = new LinkedHashSet<>();
+                Set<String> names = new LinkedHashSet<>(mappings.values());
+                names.addAll(byPackage.values());
+                if (names.isEmpty()) names.addAll(icons.keySet());
+                Map<Integer, Integer> counts = new HashMap<>();
+                for (String name : names) {
+                    Resource resource = resource(name);
+                    if (seen.add(resource.id())) counts.merge(sourceSize(resource), 1, Integer::sum);
+                }
+                int best = 0;
+                for (var entry : counts.entrySet()) {
+                    if (entry.getValue() > best || entry.getValue() == best && entry.getKey() > result) {
+                        best = entry.getValue();
+                        result = entry.getKey();
+                    }
+                }
+            }
+            if (result < 1 || result > FileIcons.MAX_SIZE) {
+                throw new IOException(dev.iconmanager.App.text(R.string.pack_resolution_invalid));
+            }
+            iconSize = result;
+            return result;
+        }
+
+        private record Resource(Resources resources, int id) {}
+
+        private static int sourceSize(Resource resource) throws IOException {
+            try {
+                Resources resources = resource.resources();
+                android.graphics.BitmapFactory.Options options = new android.graphics.BitmapFactory.Options();
+                options.inJustDecodeBounds = true;
+                options.inScaled = false;
+                android.util.TypedValue value = new android.util.TypedValue();
+                resources.getValue(resource.id(), value, true);
+                if (value.string == null || !value.string.toString().endsWith(".xml")) {
+                    try (InputStream input = resources.openRawResource(resource.id())) {
+                        android.graphics.BitmapFactory.decodeStream(input, null, options);
+                    }
+                    int size = Math.max(options.outWidth, options.outHeight);
+                    if (size < 1) throw new IOException(dev.iconmanager.App.text(R.string.icon_resource_error) + value.string);
+                    return size;
+                }
+                // XML/vector drawables are resolution-independent; retain at least the legacy canvas.
+                Drawable drawable = resources.getDrawableForDensity(resource.id(), 0, null);
+                return drawable instanceof android.graphics.drawable.BitmapDrawable bitmap
+                        ? Math.max(bitmap.getBitmap().getWidth(), bitmap.getBitmap().getHeight())
+                        : Math.max(IconShape.SIZE, Math.round(Math.max(drawable.getIntrinsicWidth(),
+                                drawable.getIntrinsicHeight()) * 160f / resources.getDisplayMetrics().densityDpi));
+            } catch (Resources.NotFoundException error) {
+                throw new IOException(dev.iconmanager.App.text(R.string.icon_resource_error) + resource.id(), error);
+            }
+        }
+
         synchronized int fallbackSize() throws IOException {
             if (fallbackSize != null) return fallbackSize;
             List<String> names = (mappings.isEmpty() ? icons.keySet().stream() : mappings.values().stream())
@@ -148,6 +213,20 @@ final class IconRepository {
             return fallbackSize;
         }
 
+        /** Resizes artwork around the centre of its unchanged canvas; the input is recycled when replaced. */
+        static Bitmap scaleArtwork(Bitmap icon, int scale) {
+            if (scale == 100) return icon;
+            int size = icon.getWidth();
+            Bitmap result = Bitmap.createBitmap(size, icon.getHeight(), Bitmap.Config.ARGB_8888);
+            try {
+                Canvas canvas = new Canvas(result);
+                canvas.scale(scale / 100f, scale / 100f, size / 2f, icon.getHeight() / 2f);
+                canvas.drawBitmap(icon, 0, 0, new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG
+                        | android.graphics.Paint.ANTI_ALIAS_FLAG));
+            } finally { icon.recycle(); }
+            return result;
+        }
+
         static android.graphics.Rect visibleBounds(Bitmap bitmap) {
             int width = bitmap.getWidth(), height = bitmap.getHeight();
             int[] pixels = new int[width * height];
@@ -164,12 +243,31 @@ final class IconRepository {
 
         Bitmap render(String name, int size) throws IOException {
             if (FileIcons.isFile(name)) return FileIcons.render(fileIcons, name, size);
+            Resource resource = resource(name);
+            Drawable drawable;
+            try {
+                drawable = resource.resources().getDrawableForDensity(resource.id(), 0, null).mutate();
+            } catch (Resources.NotFoundException e) {
+                throw new IOException(dev.iconmanager.App.text(R.string.icon_resource_error) + name, e);
+            }
+            Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+            int width = Math.max(1, drawable.getIntrinsicWidth());
+            int height = Math.max(1, drawable.getIntrinsicHeight());
+            float scale = Math.min((float) size / width, (float) size / height);
+            int w = Math.max(1, Math.round(width * scale));
+            int h = Math.max(1, Math.round(height * scale));
+            drawable.setBounds((size - w) / 2, (size - h) / 2, (size + w) / 2, (size + h) / 2);
+            drawable.draw(new Canvas(bitmap));
+            return bitmap;
+        }
+
+        private Resource resource(String name) throws IOException {
             if (!members.isEmpty()) {
                 String owner = sourcePackage(name, packageName);
                 for (Pack member : members) {
-                    if (member.packageName.equals(owner)) return member.render(resourceName(name), size);
+                    if (member.packageName.equals(owner)) return member.resource(resourceName(name));
                 }
-                return members.get(0).render(name, size);
+                return members.get(0).resource(name);
             }
             String source = sourcePackage(name, packageName);
             String resource = resourceName(name);
@@ -191,21 +289,7 @@ final class IconRepository {
                 if (resourceId == 0) throw new IOException(dev.iconmanager.App.text(R.string.pack_resource_prefix) + source + dev.iconmanager.App.text(R.string.pack_resource_missing) + resource
                         + dev.iconmanager.App.text(R.string.choose_replacement));
             }
-            Drawable drawable;
-            try {
-                drawable = sourceResources.getDrawableForDensity(resourceId, 0, null).mutate();
-            } catch (Resources.NotFoundException e) {
-                throw new IOException(dev.iconmanager.App.text(R.string.icon_resource_error) + name, e);
-            }
-            Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
-            int width = Math.max(1, drawable.getIntrinsicWidth());
-            int height = Math.max(1, drawable.getIntrinsicHeight());
-            float scale = Math.min((float) size / width, (float) size / height);
-            int w = Math.max(1, Math.round(width * scale));
-            int h = Math.max(1, Math.round(height * scale));
-            drawable.setBounds((size - w) / 2, (size - h) / 2, (size + w) / 2, (size + h) / 2);
-            drawable.draw(new Canvas(bitmap));
-            return bitmap;
+            return new Resource(sourceResources, resourceId);
         }
     }
 

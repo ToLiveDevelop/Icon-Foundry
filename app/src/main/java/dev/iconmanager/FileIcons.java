@@ -18,6 +18,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
 final class FileIcons {
+    static final int MAX_SIZE = 4096;
     private static final String PREFIX = "fileicon:";
 
     static boolean isFile(String reference) { return reference.startsWith(PREFIX); }
@@ -96,7 +97,7 @@ final class FileIcons {
         BitmapFactory.Options options = new BitmapFactory.Options();
         options.inJustDecodeBounds = true;
         BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
-        if (options.outWidth != IconShape.SIZE || options.outHeight != IconShape.SIZE
+        if (options.outWidth < 1 || options.outWidth > MAX_SIZE || options.outHeight != options.outWidth
                 || !"image/png".equals(options.outMimeType)) throw new IOException(App.text(R.string.icon_image_invalid));
     }
 

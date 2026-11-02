@@ -42,6 +42,6 @@ public final class App extends Application {
     }
 
     static String text(int resource, Object... args) {
-        return instance.getString(resource, args);
+        return args.length == 0 ? instance.getString(resource) : instance.getString(resource, args);
     }
 }

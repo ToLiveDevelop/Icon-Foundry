@@ -20,11 +20,13 @@ final class IconOverlay {
     static Bitmap readLayer(Context context, Uri uri, int invalidMessage) throws IOException {
         Bitmap bitmap = android.graphics.ImageDecoder.decodeBitmap(
                 android.graphics.ImageDecoder.createSource(context.getContentResolver(), uri), (decoder, info, source) -> {
+                    if (info.getSize().getWidth() > FileIcons.MAX_SIZE || info.getSize().getHeight() > FileIcons.MAX_SIZE) {
+                        throw new IllegalArgumentException(context.getString(R.string.layer_size_invalid));
+                    }
                     if (!"image/png".equals(info.getMimeType()) || info.getSize().getWidth() != info.getSize().getHeight()) {
                         throw new IllegalArgumentException(context.getString(invalidMessage));
                     }
                     decoder.setAllocator(android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE);
-                    decoder.setTargetSize(IconShape.SIZE, IconShape.SIZE);
                 });
         try {
             validateRendered(bitmap, invalidMessage, invalidMessage);
@@ -33,7 +35,7 @@ final class IconOverlay {
     }
 
     static void validate(Bitmap bitmap) throws IOException {
-        if (bitmap.getWidth() != IconShape.SIZE || bitmap.getHeight() != IconShape.SIZE) {
+        if (bitmap.getWidth() < 1 || bitmap.getWidth() > FileIcons.MAX_SIZE || bitmap.getHeight() != bitmap.getWidth()) {
             throw new IOException(App.text(R.string.overlay_invalid));
         }
         boolean visible = false, transparent = false;
@@ -50,8 +52,12 @@ final class IconOverlay {
     }
 
     static Bitmap load(Context context, String reference, int scale) throws IOException {
+        return load(context, reference, scale, IconShape.SIZE);
+    }
+
+    static Bitmap load(Context context, String reference, int scale, int size) throws IOException {
         if (reference.isEmpty()) return null;
-        Bitmap bitmap = FileIcons.render(FileIcons.directory(context), reference, IconShape.SIZE);
+        Bitmap bitmap = FileIcons.render(FileIcons.directory(context), reference, size);
         try {
             validate(bitmap);
             if (scale == 100) return bitmap;
@@ -70,9 +76,10 @@ final class IconOverlay {
         if (scale < MIN_SCALE || scale > MAX_SCALE) {
             throw new IllegalArgumentException(App.text(invalidMessage));
         }
-        Bitmap result = Bitmap.createBitmap(IconShape.SIZE, IconShape.SIZE, Bitmap.Config.ARGB_8888);
-        float size = IconShape.SIZE * scale / 100f;
-        float inset = (IconShape.SIZE - size) / 2;
+        int canvasSize = overlay.getWidth();
+        Bitmap result = Bitmap.createBitmap(canvasSize, canvasSize, Bitmap.Config.ARGB_8888);
+        float size = canvasSize * scale / 100f;
+        float inset = (canvasSize - size) / 2;
         new Canvas(result).drawBitmap(overlay, null,
                 new android.graphics.RectF(inset, inset, inset + size, inset + size),
                 new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG));
@@ -85,7 +92,7 @@ final class IconOverlay {
     }
 
     static void validateRendered(Bitmap bitmap, int invalidMessage, int emptyMessage) throws IOException {
-        if (bitmap.getWidth() != IconShape.SIZE || bitmap.getHeight() != IconShape.SIZE) {
+        if (bitmap.getWidth() < 1 || bitmap.getWidth() > FileIcons.MAX_SIZE || bitmap.getHeight() != bitmap.getWidth()) {
             throw new IOException(App.text(invalidMessage));
         }
         for (int y = 0; y < bitmap.getHeight(); y++) for (int x = 0; x < bitmap.getWidth(); x++) {
@@ -103,7 +110,7 @@ final class IconOverlay {
         Bitmap result = overlay.copy(Bitmap.Config.ARGB_8888, true);
         if (!clip || shape == IconShape.NONE) return result;
         try {
-            Bitmap mask = shape.mask(maskSize, corners, fileMask);
+            Bitmap mask = shape.mask(maskSize, corners, fileMask, overlay.getWidth());
             try { applyAlpha(result, mask); }
             finally { mask.recycle(); }
             return result;

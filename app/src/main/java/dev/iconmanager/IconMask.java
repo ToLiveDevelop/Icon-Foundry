@@ -20,10 +20,13 @@ final class IconMask {
         return load(context, reference, 100);
     }
 
-    /** Scaling happens on the 192 px canvas, so every preview, clip and export sees the same silhouette. */
     static Bitmap load(Context context, String reference, int scale) throws IOException {
+        return load(context, reference, scale, IconShape.SIZE);
+    }
+
+    static Bitmap load(Context context, String reference, int scale, int size) throws IOException {
         if (reference.isEmpty()) return null;
-        Bitmap bitmap = FileIcons.render(FileIcons.directory(context), reference, IconShape.SIZE);
+        Bitmap bitmap = FileIcons.render(FileIcons.directory(context), reference, size);
         try {
             validate(bitmap);
             if (scale == 100) return bitmap;
@@ -41,24 +44,26 @@ final class IconMask {
     }
 
     static void validate(Bitmap bitmap) throws IOException {
-        if (bitmap.getWidth() != IconShape.SIZE || bitmap.getHeight() != IconShape.SIZE) {
-            throw new IOException(App.text(R.string.mask_file_invalid));
-        }
         IconOverlay.validateRendered(bitmap, R.string.mask_file_invalid, R.string.mask_file_empty);
     }
 
     static Bitmap render(Bitmap source, int visibleSize) {
+        return render(source, visibleSize, IconShape.SIZE);
+    }
+
+    static Bitmap render(Bitmap source, int visibleSize, int canvasSize) {
         if (source == null) throw new IllegalArgumentException(App.text(R.string.mask_file_missing));
-        if (source.getWidth() != IconShape.SIZE || source.getHeight() != IconShape.SIZE) {
+        if (source.getWidth() < 1 || source.getHeight() != source.getWidth()) {
             throw new IllegalArgumentException(App.text(R.string.mask_file_invalid));
         }
-        Bitmap result = Bitmap.createBitmap(IconShape.SIZE, IconShape.SIZE, Bitmap.Config.ARGB_8888);
+        Bitmap result = Bitmap.createBitmap(canvasSize, canvasSize, Bitmap.Config.ARGB_8888);
         try {
-            float inset = (IconShape.SIZE - visibleSize) / 2f;
+            float extent = visibleSize * (float) canvasSize / IconShape.SIZE;
+            float inset = (canvasSize - extent) / 2f;
             Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
             paint.setColorFilter(new PorterDuffColorFilter(Color.BLACK, PorterDuff.Mode.SRC_IN));
             new Canvas(result).drawBitmap(source, null,
-                    new RectF(inset, inset, inset + visibleSize, inset + visibleSize), paint);
+                    new RectF(inset, inset, inset + extent, inset + extent), paint);
             IconOverlay.validateRendered(result, R.string.mask_file_invalid, R.string.mask_file_empty);
             return result;
         } catch (IOException | RuntimeException error) {

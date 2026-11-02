@@ -92,6 +92,8 @@ public final class MainActivity extends Activity {
     private java.util.function.Consumer<MaskSelection> pendingShapeMaskImport;
     private RadioGroup exportScope;
     private ImageView shapePreview;
+    private ImageView iconScalePreview;
+    private TextView iconSizeInfo;
     private Button shapeButton;
     private Button removeOverlay, removeBackground;
     private RadioGroup overlayScope, backgroundScope;
@@ -689,6 +691,23 @@ public final class MainActivity extends Activity {
             draft.fullPack = id == entirePack.getId(); saveDraft(); refresh();
         });
         packCard.addView(exportScope);
+        LinearLayout iconScaleRow = row();
+        iconScalePreview = new ImageView(this);
+        iconScalePreview.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        iconScalePreview.setPadding(dp(8), dp(8), dp(8), dp(8));
+        iconScalePreview.setBackground(rounded(CONTROL, 12));
+        iconScalePreview.setContentDescription(getString(R.string.icon_scale_preview));
+        iconScaleRow.addView(iconScalePreview, new LinearLayout.LayoutParams(dp(64), dp(64)));
+        iconSizeInfo = text("", 13, MUTED);
+        iconSizeInfo.setPadding(dp(12), 0, 0, 0);
+        iconScaleRow.addView(iconSizeInfo, new LinearLayout.LayoutParams(0, -2, 1));
+        LinearLayout iconScale = createScaleControl(draft.iconScale, "icon-scale", R.string.icon_scale,
+                R.string.icon_scale_help, value -> { draft.iconScale = value; saveDraft(); refreshIconScalePreview(); });
+        iconScale.setPadding(0, dp(12), 0, 0);
+        LinearLayout.LayoutParams iconScalePreviewParams = new LinearLayout.LayoutParams(-1, -2);
+        iconScalePreviewParams.bottomMargin = dp(12);
+        iconScale.addView(iconScaleRow, 1, iconScalePreviewParams);
+        packCard.addView(iconScale);
         packCard.addView(withHelp(text(getString(R.string.fallback_shape), 16, INK),
                 getString(R.string.fallback_shape), R.string.fallback_shape_help));
         LinearLayout shapeRow = row();
@@ -758,6 +777,7 @@ public final class MainActivity extends Activity {
         destinationButton.setText(draft.tree.isEmpty() ? R.string.choose_destination : R.string.change_destination);
         shapeButton.setText(getString(R.string.current_shape, getString(draft.shape.label)));
         refreshShapePreview();
+        refreshIconScalePreview();
         updateExportEnabled();
         if (!draft.coverPath.isEmpty()) {
             Bitmap bitmap = BitmapFactory.decodeFile(new File(getFilesDir(), draft.coverPath).getPath());
@@ -793,6 +813,39 @@ public final class MainActivity extends Activity {
         boolean ready = !busy && pack != null && !draft.title.isBlank() && !draft.tree.isBlank();
         exportButton.setEnabled(ready);
         exportButton.setAlpha(ready ? 1f : .4f);
+    }
+
+    private void refreshIconScalePreview() {
+        IconRepository.Pack currentPack = pack;
+        if (currentPack == null) {
+            iconScalePreview.setTag(null);
+            iconScalePreview.setImageResource(R.drawable.app_icon);
+            iconSizeInfo.setTag(null);
+            iconSizeInfo.setText(R.string.no_pack);
+            return;
+        }
+        String name = null;
+        for (IconRepository.App app : apps) {
+            name = currentPack.selected(app, draft.overrides);
+            if (name != null) break;
+        }
+        bindImage(iconScalePreview, currentPack, name);
+        String sizeKey = String.join(",", draft.packs);
+        if (sizeKey.equals(iconSizeInfo.getTag())) return;
+        iconSizeInfo.setTag(sizeKey);
+        iconSizeInfo.setText(R.string.loading);
+        thumbnails.execute(() -> {
+            String message;
+            try {
+                int size = currentPack.iconSize();
+                message = getString(R.string.icon_resolution, size, size);
+            } catch (IOException | RuntimeException error) {
+                Log.e("IconManager", "Не удалось определить разрешение", error);
+                message = error.getMessage();
+            }
+            String shown = message;
+            runOnUiThread(() -> { if (!isDestroyed() && sizeKey.equals(iconSizeInfo.getTag())) iconSizeInfo.setText(shown); });
+        });
     }
 
     private void refreshShapePreview() {
@@ -970,6 +1023,9 @@ public final class MainActivity extends Activity {
         editorTab.setTag("shape-tab-editor");
         fileTab.setTag("shape-tab-file");
         for (Button tab : new Button[]{presetsTab, editorTab, fileTab}) {
+            tab.setStateListAnimator(null);
+            tab.setElevation(0);
+            tab.setTranslationZ(0);
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -2, 1);
             tabs.addView(tab, params);
         }
@@ -1919,7 +1975,7 @@ public final class MainActivity extends Activity {
         preview.setContentDescription(getString(R.string.file_icon_preview));
         PreviewEffects effects = previewEffects(false);
         IconRepository.Pack basePack = pack;
-        if (!effects.overlay().isEmpty() || !effects.background().isEmpty()) {
+        if (!effects.overlay().isEmpty() || !effects.background().isEmpty() || effects.iconScale() != 100) {
             String key = "file-preview:" + appKey + ":" + effects.key() + ":" + String.join(",", draft.packs);
             preview.setTag(key);
             Bitmap rendering = image.copy(Bitmap.Config.ARGB_8888, true);
@@ -2022,17 +2078,18 @@ public final class MainActivity extends Activity {
 
     private record PreviewEffects(String overlay, int overlayScale, boolean overlayClip,
                                   String background, int backgroundScale, boolean backgroundClip,
-                                  IconShape shape, int[] corners, String shapeFile, int maskScale) {
+                                  IconShape shape, int[] corners, String shapeFile, int maskScale, int iconScale) {
         String key() {
             return overlay + ":" + overlayScale + ":" + overlayClip + ":" + background + ":" + backgroundScale
-                    + ":" + backgroundClip + ":" + shapeKey(shape, corners, shapeFile) + ":" + maskScale;
+                    + ":" + backgroundClip + ":" + shapeKey(shape, corners, shapeFile) + ":" + maskScale + ":" + iconScale;
         }
     }
 
     private PreviewEffects previewEffects(boolean fallback) {
         return new PreviewEffects(fallback || draft.overlayAll ? draft.overlay : "", draft.overlayScale, draft.overlayClip,
                 fallback || draft.backgroundAll ? draft.background : "", draft.backgroundScale, draft.backgroundClip,
-                draft.shape, draft.corners.clone(), draft.shape == IconShape.FILE ? draft.shapeFile : "", draft.maskScale);
+                draft.shape, draft.corners.clone(), draft.shape == IconShape.FILE ? draft.shapeFile : "", draft.maskScale,
+                fallback ? 100 : draft.iconScale);
     }
 
     private Bitmap withPreviewEffects(Bitmap image, PreviewEffects effects, int visibleSize, boolean fallback) throws IOException {
@@ -2072,6 +2129,7 @@ public final class MainActivity extends Activity {
     }
 
     private Bitmap withPreviewEffects(Bitmap image, PreviewEffects effects, IconRepository.Pack basePack) throws IOException {
+        image = IconRepository.Pack.scaleArtwork(image, effects.iconScale());
         int visibleSize = IconShape.SIZE - 2 * IconShape.INSET;
         try {
             if (basePack != null && !effects.background().isEmpty()
@@ -2126,15 +2184,16 @@ public final class MainActivity extends Activity {
             Bitmap cover = null;
             Bitmap overlay = null, background = null, backdrop = null, shapeMask = null;
             try {
-                overlay = IconOverlay.load(this, snapshot.overlay, snapshot.overlayScale);
-                background = IconBackground.load(this, snapshot.background, snapshot.backgroundScale);
-                shapeMask = IconMask.load(this, snapshot.shapeFile, snapshot.maskScale);
+                int iconSize = currentPack.iconSize();
+                overlay = IconOverlay.load(this, snapshot.overlay, snapshot.overlayScale, iconSize);
+                background = IconBackground.load(this, snapshot.background, snapshot.backgroundScale, iconSize);
+                shapeMask = IconMask.load(this, snapshot.shapeFile, snapshot.maskScale, iconSize);
                 if (background != null && snapshot.backgroundAll) {
                     backdrop = IconBackground.render(background, shape, snapshot.corners,
                             currentPack.fallbackSize(), snapshot.backgroundClip, shapeMask);
                 }
                 if (coverPath.isEmpty()) cover = ThemeEngine.cover(currentPack, apps, overrides,
-                        snapshot.overlayAll ? overlay : null, snapshot.overlayClip, backdrop);
+                        snapshot.overlayAll ? overlay : null, snapshot.overlayClip, backdrop, snapshot.iconScale);
                 else {
                     cover = BitmapFactory.decodeFile(new File(getFilesDir(), coverPath).getPath());
                     if (cover == null) throw new IOException(App.text(R.string.cover_read_error));
@@ -2144,6 +2203,7 @@ public final class MainActivity extends Activity {
                         cover, tree, null, snapshot.wallpaperPath.isEmpty() ? null
                                 : new File(getFilesDir(), snapshot.wallpaperPath), overlay, snapshot.overlayAll,
                         snapshot.overlayClip, background, snapshot.backgroundAll, snapshot.backgroundClip, shapeMask,
+                        snapshot.iconScale,
                         (done, total) -> {
                             if (done == 1 || done == total || done % 10 == 0) runOnUiThread(() -> {
                                 if (!isDestroyed()) {

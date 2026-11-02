@@ -19,11 +19,11 @@
     <string name="use_overlay">Use overlay</string>
     <string name="overlay_preview">Overlay preview on an icon</string>
     <string name="overlay_scale">Overlay scale: %1$d%%</string>
-    <string name="overlay_scale_help" formatted="false">50–150%, centred on the 192 × 192 canvas. Increase the scale for PNGs with transparent margins. Artwork outside the canvas is clipped. Tap Apply to save; the original image is unchanged.</string>
+    <string name="overlay_scale_help" formatted="false">50–150%, centred on the icon canvas. Export resolution matches the predominant icon size of the selected packs (shown in Theme options). Increase the scale for PNGs with transparent margins. Artwork outside the canvas is clipped. Tap Apply to save; the original image is unchanged.</string>
     <string name="overlay_scale_invalid" formatted="false">Overlay scale must be between 50% and 150%.</string>
     <string name="overlay_fallback">Only system icons without a replacement</string>
     <string name="overlay_all">All icons, including packs and files</string>
-    <string name="overlay_help">A square PNG with a transparent background and centre: a frame, highlights or decoration. Preferably 192 × 192 px; other sizes are resized to 192 × 192 without cropping. This is the icon_border.png top layer, not a clipping mask. Transparent areas reveal the icon; opaque areas cover it. HONOR applies it to icons without replacements. In All mode, Icon Foundry also draws it onto pack and file icons during export. A copy is saved in the template.</string>
+    <string name="overlay_help">A square PNG up to 4096 × 4096 px with a transparent background and centre: a frame, highlights or decoration. The source resolution is preserved in the template. Icons and technical layers share the predominant appfilter icon size of the selected packs (the largest one when packs differ); manual replacements are fitted to it. This is the icon_border.png top layer, not a clipping mask. Transparent areas reveal the icon; opaque areas cover it. HONOR applies it to icons without replacements. In All mode, Icon Foundry also draws it onto pack and file icons during export.</string>
     <string name="overlay_invalid">Choose a square PNG with visible artwork and fully transparent areas. Do not use an opaque image or an empty file.</string>
     <string name="overlay_archive_error">The theme archive overlay is missing or damaged.</string>
     <string name="background_title">Background under icons</string>
@@ -31,9 +31,9 @@
     <string name="remove_background">Remove background</string>
     <string name="use_background">Use background</string>
     <string name="background_preview">Background preview under an icon</string>
-    <string name="background_help">A square PNG, preferably 192 × 192 px. Opaque or transparent images are supported. The background appears behind the icon, through transparent areas; it does not replace the existing icon background. Adjust scale and clipping in Choose shape. All mode also adds it to pack and file icons. A copy is saved in the template.</string>
+    <string name="background_help">A square PNG up to 4096 × 4096 px. Opaque or transparent images are supported; the source resolution is preserved in the template. Export resolution matches the predominant icon size of the selected packs (shown in Theme options). The background appears behind the icon, through transparent areas; it does not replace the existing icon background. Adjust scale and clipping in Choose shape. All mode also adds it to pack and file icons.</string>
     <string name="background_scale">Background scale: %1$d%%</string>
-    <string name="background_scale_help" formatted="false">50–150%, centred on the 192 × 192 canvas. The preview updates immediately. Tap Apply to save; the original PNG is unchanged.</string>
+    <string name="background_scale_help" formatted="false">50–150%, centred on the icon canvas. Export resolution matches the predominant icon size of the selected packs (shown in Theme options). The preview updates immediately. Tap Apply to save; the original PNG is unchanged.</string>
     <string name="background_scale_invalid" formatted="false">Background scale must be between 50% and 150%.</string>
     <string name="background_clip">Clip background to shape</string>
     <string name="background_clip_help">Hides the background outside the selected shape. Without a shape, the PNG keeps its own outline. Pack and file icons themselves are not cropped.</string>
@@ -118,8 +118,15 @@
     <string name="mask_file_missing">Choose a PNG mask before applying this shape.</string>
     <string name="mask_file_empty">The PNG mask is fully transparent.</string>
     <string name="mask_scale">Mask scale: %1$d%%</string>
-    <string name="mask_scale_help" formatted="false">50–150% of the PNG on the 192 × 192 icon canvas, centred. Lower values shrink the silhouette and leave more space around it; higher values enlarge it, and anything beyond the canvas is cut off. The preview updates at once; press Apply to save. The source file is not changed.</string>
+    <string name="mask_scale_help" formatted="false">50–150% of the PNG on the icon canvas, centred. Export resolution matches the predominant icon size of the selected packs (shown in Theme options). Lower values shrink the silhouette and leave more space around it; higher values enlarge it, and anything beyond the canvas is cut off. The preview updates at once; press Apply to save. The source file is not changed.</string>
+    <string name="layer_size_invalid">Choose a PNG no larger than 4096 × 4096 px.</string>
+    <string name="pack_resolution_invalid">Could not determine the pack resolution, or it exceeds the supported 4096 px canvas.</string>
     <string name="mask_scale_invalid">Mask scale must be between 50% and 150%.</string>
+    <string name="icon_scale">Icon scale: %1$d%%</string>
+    <string name="icon_scale_help" formatted="false">50–150% for pack icons and manually chosen icons. The artwork is resized around the centre of its canvas: below 100% leaves transparent margins, so the background and its frame stay visible; above 100% enlarges it and cuts off the edges. Overlay and background in All mode are applied after scaling. System icons without a replacement are scaled by HONOR according to the shape and are not affected. The app list, icon picker and auto cover show the result.</string>
+    <string name="icon_scale_preview">Icon scale preview</string>
+    <string name="icon_resolution">Icon resolution: %1$d × %2$d px</string>
+    <string name="icon_scale_invalid">Icon scale must be between 50% and 150%.</string>
     <string name="help">Help</string>
     <string name="help_about">Help: %1$s</string>
     <string name="close">Close</string>
@@ -212,8 +219,6 @@
     <string name="theme_xml_invalid">"Invalid theme XML."</string>
     <string name="theme_metadata_format">"Unknown theme metadata format."</string>
     <string name="theme_metadata_error">"Could not read theme metadata."</string>
-    <string name="shared_activity_error">"The HONOR format cannot distinguish the shared activity "</string>
-    <string name="shared_activity_help">". Assign the same icon to all shortcuts for this app."</string>
     <string name="saved_app_error">"Invalid saved app: "</string>
     <string name="component_conflict">"Component name conflict in HONOR format: "</string>
     <string name="component_name_error">"Invalid component name."</string>

@@ -10,8 +10,8 @@ android {
         applicationId 'dev.iconmanager'
         minSdk 35
         targetSdk 37
-        versionCode 37
-        versionName '1.28'
+        versionCode 39
+        versionName '1.30'
         testInstrumentationRunner 'dev.iconmanager.DeviceTests'
     }
     compileOptions {

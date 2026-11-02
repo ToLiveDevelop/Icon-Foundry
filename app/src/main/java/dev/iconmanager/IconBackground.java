@@ -20,8 +20,12 @@ final class IconBackground {
     }
 
     static Bitmap load(Context context, String reference, int scale) throws IOException {
+        return load(context, reference, scale, IconShape.SIZE);
+    }
+
+    static Bitmap load(Context context, String reference, int scale, int size) throws IOException {
         if (reference.isEmpty()) return null;
-        Bitmap bitmap = FileIcons.render(FileIcons.directory(context), reference, IconShape.SIZE);
+        Bitmap bitmap = FileIcons.render(FileIcons.directory(context), reference, size);
         try {
             validate(bitmap);
             if (scale == 100) return bitmap;

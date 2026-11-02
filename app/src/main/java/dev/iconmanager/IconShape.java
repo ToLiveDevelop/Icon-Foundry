@@ -124,9 +124,14 @@ enum IconShape {
     }
 
     Bitmap mask(int visibleSize, int[] corners, Bitmap fileMask) {
+        return mask(visibleSize, corners, fileMask, SIZE);
+    }
+
+    /** visibleSize uses preview coordinates; the silhouette scales proportionally to the export canvas. */
+    Bitmap mask(int visibleSize, int[] corners, Bitmap fileMask, int canvasSize) {
         if (visibleSize < 1 || visibleSize > SIZE) throw new IllegalArgumentException(App.text(R.string.shape_size_invalid));
         if (this == NONE) throw new IllegalStateException(App.text(R.string.shape_not_selected));
-        if (this == FILE) return IconMask.render(fileMask, visibleSize);
+        if (this == FILE) return IconMask.render(fileMask, visibleSize, canvasSize);
         Path path = new Path();
         switch (this) {
             case CIRCLE -> path.addCircle(.5f, .5f, .5f, Path.Direction.CW);
@@ -181,12 +186,13 @@ enum IconShape {
             }
             default -> throw new IllegalStateException(App.text(R.string.shape_unknown));
         }
-        float inset = (SIZE - visibleSize) / 2f;
+        float extent = visibleSize * (float) canvasSize / SIZE;
+        float inset = (canvasSize - extent) / 2f;
         Matrix transform = new Matrix();
-        transform.setScale(visibleSize, visibleSize);
+        transform.setScale(extent, extent);
         transform.postTranslate(inset, inset);
         path.transform(transform);
-        Bitmap bitmap = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888);
+        Bitmap bitmap = Bitmap.createBitmap(canvasSize, canvasSize, Bitmap.Config.ARGB_8888);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         paint.setColor(Color.BLACK);
         new Canvas(bitmap).drawPath(path, paint);

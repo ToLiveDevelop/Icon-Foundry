@@ -5,6 +5,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import java.io.File;
@@ -106,6 +107,8 @@ public final class DeviceTests extends Instrumentation {
                     && info.badge().getHeight() == 96, "Discovered pack has an application icon for picker");
         }
         IconRepository.Pack pack = repository.load(packName);
+        verifyNativeResolution(context, repository, packs, pack);
+        if ("true".equals(arguments.getString("nativeResolutionOnly"))) return;
         verifyShapeExamples(context, pack);
         verifyFileMask(context, pack);
         verifySettingsResources(context);
@@ -220,7 +223,17 @@ public final class DeviceTests extends Instrumentation {
         Map<String, String> contactTargets = ThemeEngine.targets(List.of(phone, contacts), pack, Map.of());
         check(phoneIcon.equals(contactTargets.get(phone.component().getClassName())), "Dialer has its own activity PNG");
         check(contactsIcon.equals(contactTargets.get("com.hihonor.contacts")), "Contacts has correct package fallback independent of launcher ordering");
-        check(contactsIcon.equals(contactTargets.get(contacts.component().getClassName())), "Contacts activity is distinct from dialer");
+        check(!contactTargets.containsKey(contacts.component().getClassName()),
+                "Contacts activity uses its package icon instead of a global activity-class file");
+        IconRepository.App googleContacts = new IconRepository.App(
+                new ComponentName("com.google.android.contacts", contacts.component().getClassName()), "Google Contacts");
+        Map<String, String> googleOverride = Map.of(googleContacts.key(), phoneIcon);
+        Map<String, String> sharedContacts = ThemeEngine.targets(List.of(phone, contacts, googleContacts), pack, googleOverride);
+        check(phoneIcon.equals(sharedContacts.get("com.google.android.contacts"))
+                        && contactsIcon.equals(sharedContacts.get("com.hihonor.contacts"))
+                        && phoneIcon.equals(sharedContacts.get(phone.component().getClassName()))
+                        && !sharedContacts.containsKey(contacts.component().getClassName()),
+                "Google Contacts sharing PeopleActivity with HONOR Contacts exports without a conflict");
         check(pack.selected(phone, Map.of(phone.key(), contactsIcon)).equals(contactsIcon), "Manual override wins over compatibility mapping");
         for (boolean full : List.of(false, true)) {
             Map<String, String> targets = ThemeEngine.exportTargets(apps, pack, Map.of(), full);
@@ -293,7 +306,10 @@ public final class DeviceTests extends Instrumentation {
         check(sharedTargets.size() == 2 && sharedTargets.containsKey("dev.test.other")
                 && sharedTargets.containsKey("dev.test.unlisted"), "Shared activity classes use distinct package keys");
         overrides.put(alias.key(), "");
-        expectFailure(() -> ThemeEngine.targets(List.of(unlisted, alias, shared), pack, overrides), "Ambiguous per-activity mapping is explicitly rejected");
+        Map<String, String> ambiguous = ThemeEngine.targets(List.of(unlisted, alias, shared), pack, overrides);
+        check(!ambiguous.containsKey(unlisted.component().getClassName()) && !ambiguous.containsKey("dev.test.unlisted")
+                        && ambiguous.containsKey("dev.test.other"),
+                "Conflicting shared activity class is skipped instead of overriding another app");
         overrides.remove(alias.key());
         List<IconRepository.App> all = new ArrayList<>(apps);
         all.add(unlisted);
@@ -509,6 +525,7 @@ public final class DeviceTests extends Instrumentation {
                 });
                 if (mode.equals("dark")) {
                     verifyShapePickerUi(result);
+                    verifyIconScaleUi(result);
                     verifyOverlayUi(result);
                     verifyBackgroundUi(result);
                 }
@@ -687,6 +704,11 @@ public final class DeviceTests extends Instrumentation {
                                     && decor.findViewWithTag("shape-tab-presets").isSelected(),
                             "Preset shapes tab opens first for a preset shape");
                     android.view.View fileTab = decor.findViewWithTag("shape-tab-file");
+                    for (String tag : List.of("shape-tab-presets", "shape-tab-editor", "shape-tab-file")) {
+                        android.view.View tab = decor.findViewWithTag(tag);
+                        check(tab.getStateListAnimator() == null && tab.getElevation() == 0 && tab.getTranslationZ() == 0,
+                                "Shape selector tabs have no resting or pressed elevation: " + tag);
+                    }
                     check(fileTab != null, "Shape popup offers a PNG mask tab");
                     fileTab.performClick();
                     check(decor.findViewWithTag("shape-file").getVisibility() == android.view.View.VISIBLE
@@ -746,6 +768,8 @@ public final class DeviceTests extends Instrumentation {
                 android.graphics.Paint paint = new android.graphics.Paint();
                 paint.setColor(0xB0FFFFFF);
                 new android.graphics.Canvas(overlay).drawRect(24, 24, 168, 168, paint);
+                paint.setColor(0xFF4080FF);
+                new android.graphics.Canvas(overlay).drawRect(80, 80, 112, 112, paint);
                 try { isolated.overlay = FileIcons.save(activity, overlay); }
                 finally { overlay.recycle(); }
                 ((android.view.View) field(activity, "shapeButton")).performClick();
@@ -885,12 +909,87 @@ public final class DeviceTests extends Instrumentation {
         }
     }
 
+    private void verifyIconScaleUi(MainActivity activity) throws Exception {
+        Draft original = (Draft) field(activity, "draft");
+        Draft isolated = Draft.fromJson(original.toJson());
+        isolated.overlay = ""; isolated.overlayAll = false;
+        isolated.background = ""; isolated.backgroundAll = false;
+        isolated.iconScale = 100;
+        var build = MainActivity.class.getDeclaredMethod("buildScreen");
+        build.setAccessible(true);
+        Bitmap[] initial = new Bitmap[1];
+        try {
+            runOnMainChecked(() -> {
+                setField(activity, "draft", isolated);
+                build.invoke(activity);
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.view.View decor = activity.getWindow().getDecorView();
+                android.widget.SeekBar slider = decor.findViewWithTag("icon-scale");
+                check(slider != null && slider.getProgress() == 100 && slider.getMin() == IconOverlay.MIN_SCALE
+                                && slider.getMax() == IconOverlay.MAX_SCALE,
+                        "Theme options expose a 50–150% icon scale slider");
+                check(decor.findViewWithTag("help-icon_scale_help") != null, "Icon scale has its help button");
+                IconRepository.Pack pack = (IconRepository.Pack) field(activity, "pack");
+                int size = pack.iconSize();
+                android.widget.TextView info = (android.widget.TextView) field(activity, "iconSizeInfo");
+                check(info.getText().toString().equals(activity.getString(R.string.icon_resolution, size, size)),
+                        "Theme options show the detected pack icon resolution: " + info.getText());
+                android.widget.ImageView preview = (android.widget.ImageView) field(activity, "iconScalePreview");
+                android.widget.LinearLayout.LayoutParams previewParams =
+                        (android.widget.LinearLayout.LayoutParams) ((android.view.View) preview.getParent()).getLayoutParams();
+                check(previewParams.bottomMargin >= Math.round(12 * activity.getResources().getDisplayMetrics().density),
+                        "Icon scale preview has at least 12dp spacing before the slider arrows");
+                int[] previewPosition = new int[2], arrowPosition = new int[2];
+                preview.getLocationInWindow(previewPosition);
+                decor.findViewWithTag("icon-scale-decrease").getLocationInWindow(arrowPosition);
+                check(arrowPosition[1] - previewPosition[1] - preview.getHeight()
+                                >= Math.round(12 * activity.getResources().getDisplayMetrics().density),
+                        "Rendered icon scale preview stays at least 12dp above the decrease button");
+                check(preview.getDrawable() instanceof android.graphics.drawable.BitmapDrawable,
+                        "Icon scale preview shows a pack icon");
+                initial[0] = ((android.graphics.drawable.BitmapDrawable) preview.getDrawable()).getBitmap()
+                        .copy(Bitmap.Config.ARGB_8888, false);
+                decor.findViewWithTag("icon-scale-increase").performClick();
+                check(slider.getProgress() == 101 && isolated.iconScale == 101
+                                && activity.getSharedPreferences("draft", 0).getString("json", "").contains("\"iconScale\":101"),
+                        "Icon scale arrow changes and saves the draft immediately");
+                for (int i = 0; i < 41; i++) decor.findViewWithTag("icon-scale-decrease").performClick();
+                check(isolated.iconScale == 60, "Icon scale arrows reach 60%");
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.widget.ImageView preview = (android.widget.ImageView) field(activity, "iconScalePreview");
+                Bitmap scaled = ((android.graphics.drawable.BitmapDrawable) preview.getDrawable()).getBitmap();
+                check(opaquePixels(scaled) < opaquePixels(initial[0]) * 0.6,
+                        "Icon scale preview shrinks the pack icon artwork");
+            });
+        } finally {
+            if (initial[0] != null) initial[0].recycle();
+            runOnMainChecked(() -> {
+                setField(activity, "draft", original);
+                original.save(activity);
+                build.invoke(activity);
+            });
+        }
+    }
+
+    private static int opaquePixels(Bitmap bitmap) {
+        int count = 0;
+        for (int y = 0; y < bitmap.getHeight(); y++) for (int x = 0; x < bitmap.getWidth(); x++) {
+            if (Color.alpha(bitmap.getPixel(x, y)) > 128) count++;
+        }
+        return count;
+    }
+
     private void verifyOverlayUi(MainActivity activity) throws Exception {
         Draft original = (Draft) field(activity, "draft");
         Draft isolated = Draft.fromJson(original.toJson());
         isolated.overlay = ""; isolated.overlayAll = false;
         isolated.background = "";
         isolated.coverPath = ""; isolated.wallpaperPath = "";
+        isolated.iconScale = 100;
         java.util.Set<String> beforeFiles = new java.util.HashSet<>();
         File directory = FileIcons.directory(activity);
         File[] existing = directory.listFiles();
@@ -1010,6 +1109,7 @@ public final class DeviceTests extends Instrumentation {
         Draft isolated = Draft.fromJson(original.toJson());
         isolated.background = ""; isolated.backgroundScale = 100; isolated.backgroundClip = true; isolated.backgroundAll = false;
         isolated.overlay = ""; isolated.wallpaperPath = ""; isolated.shape = IconShape.ROUNDED_SQUARE;
+        isolated.iconScale = 100;
         File directory = FileIcons.directory(activity);
         java.util.Set<String> beforeFiles = new java.util.HashSet<>();
         File[] existing = directory.listFiles();
@@ -1470,6 +1570,230 @@ public final class DeviceTests extends Instrumentation {
                         "Light and dark resource palettes match requested appearance");
             }
         } finally { preferences.edit().clear().commit(); }
+    }
+
+    private void verifyNativeResolution(Context context, IconRepository repository,
+                                        List<IconRepository.PackInfo> packs, IconRepository.Pack base) throws Exception {
+        long start = android.os.SystemClock.elapsedRealtime();
+        int baseSize = base.iconSize();
+        check(baseSize > 0 && base.iconSize() == baseSize, "Native pack resolution is valid and cached");
+        IconRepository.Pack high = packs.stream().anyMatch(info -> info.packageName().equals("com.pressedprem.iconpack"))
+                ? repository.load("com.pressedprem.iconpack") : base;
+        int highSize = high.iconSize();
+        if (high != base) check(highSize == 256,
+                "Pressed uses the predominant 256px appfilter canvas, not outliers or preview pictures: " + highSize);
+        IconRepository.Pack combined = IconRepository.combine(List.of(base, high));
+        int size = Math.max(baseSize, highSize);
+        check(combined.iconSize() == size && IconRepository.combine(List.of(high, base)).iconSize() == size,
+                "Combined packs use the largest source canvas regardless of priority");
+        IconRepository.Pack pack256 = null;
+        List<String> largest = new java.util.ArrayList<>();
+        for (IconRepository.Icon icon : high.icons.values()) {
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            bounds.inScaled = false;
+            BitmapFactory.decodeResource(high.resources, icon.id(), bounds);
+            int nativeSize = Math.max(bounds.outWidth, bounds.outHeight);
+            if (nativeSize > highSize && largest.size() < 3) largest.add(icon.name() + " "
+                    + bounds.outWidth + "x" + bounds.outHeight + " mapped=" + high.mappings.containsValue(icon.name()));
+            if (nativeSize == 256 && pack256 == null) {
+                pack256 = new IconRepository.Pack(high.packageName, high.label, high.resources, high.badge, high.manager);
+                pack256.icons.put(icon.name(), icon);
+                pack256.byPackage.put("dev.test.nativeicons", icon.name());
+            }
+            if (pack256 != null && !largest.isEmpty()) break;
+        }
+        if (high != base) check(pack256 != null && pack256.iconSize() == 256 && !largest.isEmpty(),
+                "Raw resource headers confirm 256px icons and larger non-icon catalogue pictures in Pressed");
+        android.os.Bundle report = new android.os.Bundle();
+        report.putString("stream", "Native resolution scan: " + base.label + "=" + baseSize + ", " + high.label
+                + "=" + highSize + "; " + (android.os.SystemClock.elapsedRealtime() - start)
+                + " ms; excluded catalogue resources: " + largest + "\n");
+        sendStatus(0, report);
+        File directory = new File(context.getCacheDir(), "native-resolution-check");
+        Files.createDirectories(directory.toPath());
+        Context isolated = new android.content.ContextWrapper(context) {
+            @Override public File getFilesDir() { return directory; }
+        };
+        Bitmap original = Bitmap.createBitmap(512, 512, Bitmap.Config.ARGB_8888);
+        android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        paint.setColor(0xB04080FF);
+        new android.graphics.Canvas(original).drawCircle(256, 256, 220, paint);
+        paint.setColor(android.graphics.Color.RED);
+        new android.graphics.Canvas(original).drawRect(220, 220, 292, 292, paint);
+        Bitmap cover = Bitmap.createBitmap(720, 1280, Bitmap.Config.ARGB_8888);
+        File source = new File(directory, "source.png");
+        try {
+            try (FileOutputStream stream = new FileOutputStream(source)) {
+                original.compress(Bitmap.CompressFormat.PNG, 100, stream);
+            }
+            for (Bitmap imported : List.of(IconOverlay.read(isolated, Uri.fromFile(source)),
+                    IconBackground.read(isolated, Uri.fromFile(source)), IconMask.read(isolated, Uri.fromFile(source)))) {
+                try { check(imported.sameAs(original), "Layer imports preserve 512px source pixels and alpha"); }
+                finally { imported.recycle(); }
+            }
+            String reference = FileIcons.save(isolated, original);
+            combined.fileIcons = FileIcons.directory(isolated);
+            Bitmap ring = Bitmap.createBitmap(200, 200, Bitmap.Config.ARGB_8888);
+            ring.eraseColor(Color.RED);
+            Bitmap shrunk = IconRepository.Pack.scaleArtwork(ring, 80);
+            Bitmap grown = IconRepository.Pack.scaleArtwork(shrunk.copy(Bitmap.Config.ARGB_8888, false), 125);
+            try {
+                check(ring.isRecycled() && shrunk.getWidth() == 200 && Color.alpha(shrunk.getPixel(10, 10)) == 0
+                                && Color.alpha(shrunk.getPixel(30, 100)) == 255 && shrunk.getPixel(100, 100) == Color.RED,
+                        "Icon scale keeps the canvas and leaves transparent margins around shrunk artwork");
+                check(Color.alpha(grown.getPixel(3, 3)) == 255,
+                        "Icon scale above 100% enlarges artwork to the canvas edges");
+            } finally { shrunk.recycle(); grown.recycle(); }
+            Bitmap same = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888);
+            check(IconRepository.Pack.scaleArtwork(same, 100) == same, "Icon scale 100% does not copy the bitmap");
+            same.recycle();
+            Draft draft = new Draft();
+            draft.packs.add(high.packageName);
+            draft.shape = IconShape.FILE;
+            draft.shapeFile = reference;
+            draft.maskScale = 130;
+            draft.overlay = reference;
+            draft.overlayScale = 120;
+            draft.background = reference;
+            draft.backgroundScale = 80;
+            draft.iconScale = 85;
+            TemplateStore store = new TemplateStore(isolated);
+            TemplateStore.Entry saved = store.save(draft, high.label, false);
+            Draft restored = store.open(saved.id());
+            check(restored.iconScale == 85 && !new Draft().toJson().has("iconScale"),
+                    "Templates persist icon scale and omit the 100% default");
+            try {
+                Draft.fromJson(new org.json.JSONObject().put("iconScale", 49));
+                check(false, "Saved icon scale below 50% is rejected");
+            } catch (org.json.JSONException expected) { check(true, "Saved icon scale below 50% is rejected"); }
+            Bitmap restoredSource = FileIcons.render(FileIcons.directory(isolated), restored.shapeFile, 512);
+            try { check(restoredSource.sameAs(original), "Templates preserve the full-resolution layer source"); }
+            finally { restoredSource.recycle(); }
+            Bitmap overlay = IconOverlay.load(isolated, restored.overlay, restored.overlayScale, size);
+            Bitmap background = IconBackground.load(isolated, restored.background, restored.backgroundScale, size);
+            Bitmap mask = IconMask.load(isolated, restored.shapeFile, restored.maskScale, size);
+            Bitmap previewMask = IconMask.load(isolated, restored.shapeFile, restored.maskScale);
+            try {
+                check(overlay.getWidth() == size && background.getWidth() == size && mask.getWidth() == size
+                                && previewMask.getWidth() == IconShape.SIZE,
+                        "Export loads original layers at the pack maximum while previews retain lightweight canvases");
+                if (pack256 != null) {
+                    ThemeEngine.Built built = ThemeEngine.build(isolated, "256px canvas", true, IconShape.FILE,
+                            restored.corners, false, pack256, List.of(), Map.of(), cover, null, overlay, false, true,
+                            background, false, true, mask, (done, total) -> {});
+                    try (var zip = new java.util.zip.ZipFile(built.file());
+                         var icons = new java.util.zip.ZipInputStream(zip.getInputStream(zip.getEntry("icons")))) {
+                        int entries = 0;
+                        for (var entry = icons.getNextEntry(); entry != null; entry = icons.getNextEntry()) {
+                            byte[] bytes = icons.readAllBytes();
+                            BitmapFactory.Options bounds = new BitmapFactory.Options();
+                            bounds.inJustDecodeBounds = true;
+                            BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
+                            check(bounds.outWidth == 256 && bounds.outHeight == 256,
+                                    "Full export normalizes high-resolution layers to a 256px-only pack canvas");
+                            entries++;
+                        }
+                        check(entries == 4, "256px full export includes icon, overlay, background and mask");
+                    } finally { Files.deleteIfExists(built.file().toPath()); }
+                }
+                IconRepository.App app = new IconRepository.App(new ComponentName("dev.test.nativeicons",
+                        "dev.test.nativeicons.Main"), "Native resolution");
+                String icon = IconRepository.reference(base.packageName, base.icons.keySet().iterator().next());
+                Map<String, String> overrides = Map.of(app.key(), icon);
+                ThemeEngine.Built manual = ThemeEngine.build(isolated, "Manual high resolution", false, IconShape.FILE,
+                        restored.corners, false, combined, List.of(app), Map.of(app.key(), reference), cover, null,
+                        overlay, true, true, background, true, true, mask, (done, total) -> {});
+                try (var zip = new java.util.zip.ZipFile(manual.file());
+                     var icons = new java.util.zip.ZipInputStream(zip.getInputStream(zip.getEntry("icons")))) {
+                    for (var entry = icons.getNextEntry(); entry != null; entry = icons.getNextEntry()) {
+                        byte[] bytes = icons.readAllBytes();
+                        BitmapFactory.Options bounds = new BitmapFactory.Options();
+                        bounds.inJustDecodeBounds = true;
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
+                        check(bounds.outWidth == size && bounds.outHeight == size,
+                                "Manual high-resolution icon is fitted to the pack canvas with every exported layer");
+                    }
+                } finally { Files.deleteIfExists(manual.file().toPath()); }
+                ThemeEngine.Built scaled = ThemeEngine.build(isolated, "Scaled icons", false, IconShape.FILE,
+                        restored.corners, false, combined, List.of(app), Map.of(app.key(), reference), cover, null,
+                        null, false, true, null, false, true, mask, 50, (done, total) -> {});
+                try (var zip = new java.util.zip.ZipFile(scaled.file());
+                     var icons = new java.util.zip.ZipInputStream(zip.getInputStream(zip.getEntry("icons")))) {
+                    int checked = 0;
+                    for (var entry = icons.getNextEntry(); entry != null; entry = icons.getNextEntry()) {
+                        byte[] bytes = icons.readAllBytes();
+                        if (entry.getName().startsWith("icon_")) continue;
+                        Bitmap actual = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                        try {
+                            check(actual.getWidth() == size && Color.alpha(actual.getPixel(size / 5, size / 2)) == 0
+                                            && Color.red(actual.getPixel(size / 2, size / 2)) > 200,
+                                    "Icon scale 50% shrinks replacement artwork inside the exported canvas");
+                        } finally { actual.recycle(); }
+                        checked++;
+                    }
+                    check(checked == 1, "Scaled export contains the replaced app icon");
+                } finally { Files.deleteIfExists(scaled.file().toPath()); }
+                try {
+                    ThemeEngine.build(isolated, "Invalid scale", false, IconShape.FILE, restored.corners, false, combined,
+                            List.of(app), Map.of(app.key(), reference), cover, null, null, false, true, null, false, true,
+                            mask, 151, (done, total) -> {});
+                    check(false, "Icon scale above 150% is rejected");
+                } catch (java.io.IOException expected) { check(true, "Icon scale above 150% is rejected"); }
+                for (IconShape shape : List.of(IconShape.FILE, IconShape.CUSTOM)) {
+                    for (boolean all : new boolean[]{false, true}) {
+                        Bitmap border = IconOverlay.border(overlay, shape, restored.corners, combined.fallbackSize(), true, mask);
+                        Bitmap backdrop = IconBackground.render(background, shape, restored.corners,
+                                combined.fallbackSize(), true, mask);
+                        Bitmap expectedMask = shape.mask(combined.fallbackSize(), restored.corners, mask, size);
+                        ThemeEngine.Built built = null;
+                        try {
+                            built = ThemeEngine.build(isolated, "Native resolution", false, shape, restored.corners, false,
+                                    combined, List.of(app), overrides, cover, null, overlay, all, true,
+                                    background, all, true, mask, (done, total) -> {});
+                            ThemeEngine.verifyArchive(built.file(), 1, shape, restored.corners, false,
+                                    combined.fallbackSize(), false, border, backdrop, mask, size);
+                            try (var zip = new java.util.zip.ZipFile(built.file());
+                                 var icons = new java.util.zip.ZipInputStream(zip.getInputStream(zip.getEntry("icons")))) {
+                                for (var entry = icons.getNextEntry(); entry != null; entry = icons.getNextEntry()) {
+                                    byte[] bytes = icons.readAllBytes();
+                                    Bitmap actual = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                                    check(actual != null, "Export entry is a readable PNG");
+                                    try {
+                                        check(actual.getWidth() == size && actual.getHeight() == size,
+                                                "Every exported icon and technical layer shares the maximum pack resolution");
+                                        Bitmap expected = switch (entry.getName()) {
+                                            case "icon_border.png" -> border.copy(Bitmap.Config.ARGB_8888, true);
+                                            case "icon_background.png" -> backdrop.copy(Bitmap.Config.ARGB_8888, true);
+                                            case "icon_mask.png" -> expectedMask.copy(Bitmap.Config.ARGB_8888, true);
+                                            default -> {
+                                                Bitmap rendered = combined.render(icon, size);
+                                                if (all) {
+                                                    IconOverlay.draw(rendered, overlay, true);
+                                                    IconBackground.draw(rendered, backdrop);
+                                                }
+                                                yield rendered;
+                                            }
+                                        };
+                                        try { check(actual.sameAs(expected), "Export preserves scaled layer alignment: "
+                                                + shape + "/" + all + "/" + entry.getName()); }
+                                        finally { expected.recycle(); }
+                                    } finally { actual.recycle(); }
+                                }
+                            }
+                        } finally {
+                            border.recycle(); backdrop.recycle(); expectedMask.recycle();
+                            if (built != null) Files.deleteIfExists(built.file().toPath());
+                        }
+                    }
+                }
+            } finally { overlay.recycle(); background.recycle(); mask.recycle(); previewMask.recycle(); }
+        } finally {
+            original.recycle(); cover.recycle();
+            try (var files = Files.walk(directory.toPath())) {
+                for (var path : files.sorted(java.util.Comparator.reverseOrder()).toList()) Files.delete(path);
+            }
+        }
     }
 
     private void verifyOverlay(Context context, IconRepository.Pack pack) throws Exception {
@@ -2912,6 +3236,14 @@ public final class DeviceTests extends Instrumentation {
             }
             check(paths.equals(java.util.Set.of("theme.xml", "night/theme.xml")),
                     "Folder fix applies only to launcher in day and night modes");
+            try (ZipInputStream icons = new ZipInputStream(zip.getInputStream(zip.getEntry("icons")))) {
+                boolean hasFolderBackground = false;
+                for (ZipEntry entry; (entry = icons.getNextEntry()) != null;) {
+                    hasFolderBackground |= entry.getName().equals("portal_ring_inner_holo.png")
+                            || entry.getName().equals("portal_ring_inner_holo_dark.png");
+                }
+                check(!hasFolderBackground, "Export does not replace the collapsed folder background");
+            }
         }
     }
 
