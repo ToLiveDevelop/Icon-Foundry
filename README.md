@@ -338,6 +338,38 @@ APK: `app\build\outputs\apk\debug\app-debug.apk`.
 ключ и не установится поверх опубликованной без удаления приложения.
 Ключи подписи в репозиторий не включаются.
 
+Для самостоятельных релизных сборок на Windows создайте собственный ключ
+(подтвердите личность организации в сертификате; срок действия — например,
+25 лет):
+
+```powershell
+New-Item -ItemType Directory -Force "$HOME\.gradle" | Out-Null
+& "$env:JAVA_HOME\bin\keytool.exe" -genkeypair -v `
+  -keystore "$HOME\.gradle\icon-foundry-release.jks" `
+  -alias icon-foundry -keyalg RSA -keysize 3072 -validity 9125
+```
+
+`keytool` запросит пароль хранилища и ключа, а также данные сертификата.
+Скопируйте четыре значения ниже в `$HOME\.gradle\gradle.properties`
+(создайте файл, если его нет); замените путь на ваш абсолютный путь,
+используя `/` как разделитель. Не добавляйте этот файл или `.jks` в Git:
+
+```properties
+iconFoundryStoreFile=C:/Users/USERNAME/.gradle/icon-foundry-release.jks
+iconFoundryStorePassword=YOUR_STORE_PASSWORD
+iconFoundryKeyAlias=icon-foundry
+iconFoundryKeyPassword=YOUR_KEY_PASSWORD
+```
+
+При запросе `:app:assembleRelease` Gradle берёт значения из пользовательского
+файла свойств. Если они отсутствуют или указаны не все, сборка релизного APK
+будет остановлена, а debug-сборки продолжат работать. Передавать пароль или
+файл keystore Copilot не нужно; достаточно сообщить, что локальная настройка
+готова и можно собрать релиз. Не теряйте резервную копию `.jks` и пароли:
+без них нельзя подписать совместимое обновление. Сертификат собственного
+ключа отличается от опубликованного debug-ключа 1.33; сборка с ним не
+установится поверх этой версии без удаления приложения.
+
 ### Проверки на устройстве
 
 ```powershell

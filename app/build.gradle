@@ -2,10 +2,45 @@ plugins {
     id 'com.android.application'
 }
 
+def releaseSigningKeys = [
+        'iconFoundryStoreFile',
+        'iconFoundryStorePassword',
+        'iconFoundryKeyAlias',
+        'iconFoundryKeyPassword'
+]
+def releaseSigningValues = releaseSigningKeys.collectEntries { key ->
+    [(key): providers.gradleProperty(key).orNull]
+}
+def hasReleaseSigningValue = releaseSigningValues.values().any { it != null && !it.isBlank() }
+def hasCompleteReleaseSigning = releaseSigningValues.values().every { it != null && !it.isBlank() }
+def releaseSigningError = hasReleaseSigningValue && !hasCompleteReleaseSigning
+        ? 'Release signing requires all four iconFoundry properties in the user Gradle properties file.'
+        : !hasCompleteReleaseSigning
+        ? 'Refusing to build an unsigned release. Configure the four iconFoundry properties in the user Gradle properties file.'
+        : null
+
 android {
     namespace 'dev.iconmanager'
     compileSdk 37
 
+    signingConfigs {
+        if (hasCompleteReleaseSigning) {
+            releaseKey {
+                storeFile file(releaseSigningValues.iconFoundryStoreFile)
+                storePassword releaseSigningValues.iconFoundryStorePassword
+                keyAlias releaseSigningValues.iconFoundryKeyAlias
+                keyPassword releaseSigningValues.iconFoundryKeyPassword
+            }
+        }
+    }
+
+    if (releaseSigningError != null) {
+        tasks.configureEach { task ->
+            if (task.name.toLowerCase(Locale.ROOT) in ['packagerelease', 'bundlerelease']) {
+                task.doFirst { throw new GradleException(releaseSigningError) }
+            }
+        }
+    }
     defaultConfig {
         applicationId 'dev.iconmanager'
         minSdk 35
@@ -21,6 +56,9 @@ android {
     buildTypes {
         release {
             minifyEnabled false
+            if (hasCompleteReleaseSigning) {
+                signingConfig signingConfigs.releaseKey
+            }
         }
     }
 }
