@@ -45,6 +45,10 @@
     <string name="app_name">Icon Foundry</string>
     <string name="tagline">Иконпаки → темы HONOR</string>
     <string name="intro">Тема иконок для MagicOS 10+; обои — по желанию. Применяется вручную.</string>
+    <string name="tab_base">Основа</string>
+    <string name="tab_style">Стиль</string>
+    <string name="tab_apps">Иконки</string>
+    <string name="tab_export">Экспорт</string>
     <string name="new_theme">Новая тема</string>
     <string name="templates">Шаблоны</string>
     <string name="delete_template">Удалить</string>
@@ -75,7 +79,7 @@
     <string name="crop_zoom">Масштаб обложки</string>
     <string name="crop_use">Использовать обложку</string>
     <string name="choose_cover">Выбрать изображение</string>
-    <string name="pack">Иконпаки-основа</string>
+    <string name="pack">Источники иконок</string>
     <string name="theme_options">Параметры иконок</string>
     <string name="choose_pack">Выбрать иконпак</string>
     <string name="no_pack">Иконпак пока не выбран</string>
@@ -90,8 +94,8 @@
     <string name="pack_priority_help">Приоритет сверху вниз: иконка приложения берётся из первого пака, где она есть. Порядок меняется перетаскиванием за ≡.</string>
     <string name="apps">Иконки приложений</string>
     <string name="apps_help">Нажмите приложение для замены. Сначала открыт пак, из которого взята иконка; другой загрузится после выбора. Ссылки на ресурсы дают свежие иконки после обновления пака; удалённый пак или исчезнувший ресурс нужно заменить. Файлы хранятся в шаблоне. Назначения и исключения действуют в обоих режимах.</string>
-    <string name="export_scope">Состав темы</string>
-    <string name="fallback_shape">Форма иконок без замены</string>
+    <string name="export_scope">Какие приложения включить</string>
+    <string name="fallback_shape">Форма остальных иконок</string>
     <string name="folder_background">Убирать серый фон в стеке папки</string>
     <string name="folder_background_help">Примените тему целиком, не только иконки — иначе фон стека останется. Без своих обоев возможны запасные. Также убирается фон стандартного неизвестного ярлыка в ночном режиме.</string>
     <string name="fallback_shape_help">Маска icon_mask.png применяется к системным иконкам без замены, включая будущие приложения. Выберите готовую форму, настройте углы или загрузите квадратный PNG: альфа-канал задаёт силуэт. Размер маски соответствует типичному размеру иконок пака. Иконки пака не меняются; «Без маски» сохраняет прежний вид.</string>
@@ -155,13 +159,14 @@
     <string name="shape_preview_gradient">Фон: градиент для предпросмотра, не входит в тему</string>
     <string name="shape_no_apps">Нет установленных приложений для предпросмотра.</string>
     <string name="shape_preview_error">Не удалось загрузить системные иконки для предпросмотра.</string>
+    <string name="style_preview">Предпросмотр стиля: сверху системные иконки, снизу замены из пака</string>
     <string name="scope_installed">Только установленные приложения</string>
     <string name="scope_full">Все иконки паков — включая будущие приложения</string>
     <string name="scope_help">Все сопоставления appfilter, включая неустановленные приложения; из нескольких паков — по приоритету, без дублей. Непривязанные альтернативы выбираются вручную. Экспорт дольше, файл больше.</string>
     <string name="export_count">\nВ экспорт: %1$d сопоставлений приложений</string>
     <string name="search_apps">Поиск по названию или пакету</string>
     <string name="only_missing">Только без иконки в паке</string>
-    <string name="system_icons">Системная иконка</string>
+    <string name="system_icons">Показывать системные иконки</string>
     <string name="not_installed_app">%1$s · не установлено</string>
     <string name="destination">Каталог экспорта</string>
     <string name="destination_help">Внутренняя память → Honor → Themes → «Использовать эту папку». Доступ ко всей памяти не нужен.</string>

@@ -22,8 +22,8 @@ import java.util.Map;
 
 final class ShapePreview implements AutoCloseable {
     static final int WIDTH = 720, HEIGHT = 440;
-    private final List<Bitmap> originals = new ArrayList<>(), unmasked = new ArrayList<>();
-    private final List<String> labels = new ArrayList<>();
+    private final List<Bitmap> originals = new ArrayList<>(), unmasked = new ArrayList<>(), packIcons = new ArrayList<>();
+    private final List<String> labels = new ArrayList<>(), packLabels = new ArrayList<>();
     private Bitmap wallpaper, overlay, background, shapeMask;
     private final int visibleSize;
     private int overlayScale = 100;
@@ -78,32 +78,9 @@ final class ShapePreview implements AutoCloseable {
         ShapePreview preview = new ShapePreview(visibleSize);
         try {
             if (examples.isEmpty()) throw new IOException(context.getString(R.string.shape_no_apps));
-            for (IconRepository.App app : examples) {
-                var icon = IconRepository.unthemedIcon(context.getPackageManager(), app.component());
-                Bitmap original = IconShape.previewSource(icon, false);
-                try { preview.originals.add(IconShape.NONE.prepare(original, IconShape.SIZE, filters)); }
-                finally { original.recycle(); }
-                Bitmap unmasked = IconShape.previewSource(icon, true);
-                try { preview.unmasked.add(IconShape.ROUNDED_SQUARE.prepare(unmasked, IconShape.SIZE, filters)); }
-                finally { unmasked.recycle(); }
-                preview.labels.add(app.label());
-            }
-            preview.overlay = IconOverlay.load(context, overlayReference);
-            preview.background = IconBackground.load(context, backgroundReference);
-            preview.shapeMask = shapeMaskReference.isEmpty() ? null : IconMask.load(context, shapeMaskReference);
+            for (IconRepository.App app : examples) preview.addSystem(context, app, filters);
+            preview.loadResources(context, wallpaperPath, overlayReference, backgroundReference, shapeMaskReference);
             preview.overlayScale = overlayScale;
-            if (!wallpaperPath.isEmpty()) {
-                File file = new File(context.getFilesDir(), wallpaperPath);
-                BitmapFactory.Options bounds = new BitmapFactory.Options();
-                bounds.inJustDecodeBounds = true;
-                BitmapFactory.decodeFile(file.getPath(), bounds);
-                BitmapFactory.Options options = new BitmapFactory.Options();
-                options.inSampleSize = 1;
-                while (Math.max(bounds.outWidth, bounds.outHeight) / options.inSampleSize > WIDTH * 2)
-                    options.inSampleSize *= 2;
-                preview.wallpaper = BitmapFactory.decodeFile(file.getPath(), options);
-                if (preview.wallpaper == null) throw new IOException(context.getString(R.string.wallpaper_read_error));
-            }
             return preview;
         } catch (android.content.pm.PackageManager.NameNotFoundException error) {
             preview.close();
@@ -111,6 +88,70 @@ final class ShapePreview implements AutoCloseable {
         } catch (IOException | RuntimeException error) {
             preview.close();
             throw error;
+        }
+    }
+
+    static ShapePreview loadStyle(Context context, List<IconRepository.App> apps, IconRepository.Pack pack,
+                                  Map<String, String> overrides, int visibleSize, String wallpaperPath,
+                                  String overlayReference, String backgroundReference, String shapeMaskReference,
+                                  List<IconFilters.Filter> filters) throws IOException {
+        ShapePreview preview = new ShapePreview(visibleSize);
+        try {
+            Collator collator = Collator.getInstance(context.getResources().getConfiguration().getLocales().get(0));
+            List<IconRepository.App> sorted = apps.stream().sorted(Comparator
+                    .comparing(IconRepository.App::label, collator).thenComparing(IconRepository.App::key)).toList();
+            java.util.Set<String> selected = new java.util.HashSet<>();
+            for (IconRepository.App app : sorted) {
+                if (!selected.add(app.component().getPackageName())) continue;
+                String name = pack == null ? null : pack.selected(app, overrides);
+                if (name == null && preview.originals.size() < 3) preview.addSystem(context, app, filters);
+                else if (name != null && preview.packIcons.size() < 3) {
+                    preview.packIcons.add(pack.render(name, 192));
+                    preview.packLabels.add(app.label());
+                }
+                if (preview.originals.size() == 3 && preview.packIcons.size() == 3) break;
+            }
+            if (preview.originals.isEmpty() && preview.packIcons.isEmpty())
+                throw new IOException(context.getString(R.string.shape_no_apps));
+            preview.loadResources(context, wallpaperPath, overlayReference, backgroundReference, shapeMaskReference);
+            return preview;
+        } catch (android.content.pm.PackageManager.NameNotFoundException error) {
+            preview.close();
+            throw new IOException(context.getString(R.string.shape_preview_error), error);
+        } catch (IOException | RuntimeException error) {
+            preview.close();
+            throw error;
+        }
+    }
+
+    private void addSystem(Context context, IconRepository.App app, List<IconFilters.Filter> filters)
+            throws android.content.pm.PackageManager.NameNotFoundException {
+        var icon = IconRepository.unthemedIcon(context.getPackageManager(), app.component());
+        Bitmap original = IconShape.previewSource(icon, false);
+        try { originals.add(IconShape.NONE.prepare(original, IconShape.SIZE, filters)); }
+        finally { original.recycle(); }
+        Bitmap unmasked = IconShape.previewSource(icon, true);
+        try { this.unmasked.add(IconShape.ROUNDED_SQUARE.prepare(unmasked, IconShape.SIZE, filters)); }
+        finally { unmasked.recycle(); }
+        labels.add(app.label());
+    }
+
+    private void loadResources(Context context, String wallpaperPath, String overlayReference,
+                               String backgroundReference, String shapeMaskReference) throws IOException {
+        overlay = IconOverlay.load(context, overlayReference);
+        background = IconBackground.load(context, backgroundReference);
+        shapeMask = shapeMaskReference.isEmpty() ? null : IconMask.load(context, shapeMaskReference);
+        if (!wallpaperPath.isEmpty()) {
+            File file = new File(context.getFilesDir(), wallpaperPath);
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(file.getPath(), bounds);
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inSampleSize = 1;
+            while (Math.max(bounds.outWidth, bounds.outHeight) / options.inSampleSize > WIDTH * 2)
+                options.inSampleSize *= 2;
+            wallpaper = BitmapFactory.decodeFile(file.getPath(), options);
+            if (wallpaper == null) throw new IOException(context.getString(R.string.wallpaper_read_error));
         }
     }
 
@@ -143,12 +184,25 @@ final class ShapePreview implements AutoCloseable {
                 ? IconMask.scaled(source, maskScale) : null;
         try {
             return renderScene(shape, corners, overlayScale, overlayClip, backgroundScale, backgroundClip,
-                    scaledMask == null ? source : scaledMask);
+                    scaledMask == null ? source : scaledMask, false, false, false, 100);
+        } finally { if (scaledMask != null) scaledMask.recycle(); }
+    }
+
+    Bitmap renderStyle(IconShape shape, int[] corners, int overlayScale, boolean overlayClip,
+                       int backgroundScale, boolean backgroundClip, Bitmap fileMask, int maskScale,
+                       boolean overlayAll, boolean backgroundAll, int iconScale) {
+        Bitmap source = fileMask == null ? shapeMask : fileMask;
+        Bitmap scaledMask = shape == IconShape.FILE && source != null && maskScale != 100
+                ? IconMask.scaled(source, maskScale) : null;
+        try {
+            return renderScene(shape, corners, overlayScale, overlayClip, backgroundScale, backgroundClip,
+                    scaledMask == null ? source : scaledMask, true, overlayAll, backgroundAll, iconScale);
         } finally { if (scaledMask != null) scaledMask.recycle(); }
     }
 
     private Bitmap renderScene(IconShape shape, int[] corners, int overlayScale, boolean overlayClip,
-                               int backgroundScale, boolean backgroundClip, Bitmap activeMask) {
+                               int backgroundScale, boolean backgroundClip, Bitmap activeMask, boolean mixed,
+                               boolean overlayAll, boolean backgroundAll, int iconScale) {
         Bitmap result = Bitmap.createBitmap(WIDTH, HEIGHT, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(result);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
@@ -169,36 +223,49 @@ final class ShapePreview implements AutoCloseable {
         text.setTextSize(25);
         text.setTextAlign(Paint.Align.CENTER);
         text.setShadowLayer(4, 0, 2, Color.BLACK);
-        Bitmap layer = null;
-        Bitmap backdrop = null;
+        Bitmap scaledOverlay = null, layer = null, backdrop = null;
         try {
             if (overlay != null) {
-                Bitmap scaled = IconOverlay.scaled(overlay, overlayScale);
-                try { layer = IconOverlay.border(scaled, shape, corners, visibleSize, overlayClip, activeMask); }
-                finally { scaled.recycle(); }
+                scaledOverlay = IconOverlay.scaled(overlay, overlayScale);
+                layer = IconOverlay.border(scaledOverlay, shape, corners, visibleSize, overlayClip, activeMask);
             }
             if (background != null) {
                 Bitmap scaled = IconOverlay.scaled(background, backgroundScale, R.string.background_scale_invalid);
                 try { backdrop = IconBackground.render(scaled, shape, corners, visibleSize, backgroundClip, activeMask); }
                 finally { scaled.recycle(); }
             }
-            for (int i = 0; i < originals.size(); i++) {
-                Bitmap icon = shape.previewPrepared((shape == IconShape.NONE ? originals : unmasked).get(i),
-                        visibleSize, corners, activeMask);
-                try {
+            int slots = mixed ? 6 : originals.size();
+            for (int slot = 0; slot < slots; slot++) {
+                boolean packed = mixed && slot >= 3;
+                int index = packed ? slot - 3 : slot;
+                if (packed ? index >= packIcons.size() : index >= originals.size()) continue;
+                Bitmap icon;
+                String label;
+                if (packed) {
+                    icon = IconRepository.Pack.scaleArtwork(
+                            packIcons.get(index).copy(Bitmap.Config.ARGB_8888, true), iconScale);
+                    label = packLabels.get(index);
+                    if (overlayAll) IconOverlay.draw(icon, scaledOverlay, overlayClip);
+                    if (backgroundAll) IconBackground.draw(icon, backdrop);
+                } else {
+                    icon = shape.previewPrepared((shape == IconShape.NONE ? originals : unmasked).get(index),
+                            visibleSize, corners, activeMask);
+                    label = labels.get(index);
                     IconOverlay.draw(icon, layer);
                     IconBackground.draw(icon, backdrop);
-                    int cx = 120 + i % 3 * 240, top = 40 + i / 3 * 208;
+                }
+                try {
+                    int cx = 120 + slot % 3 * 240, top = 40 + slot / 3 * 208;
                     canvas.drawBitmap(icon, null, new Rect(cx - 60, top, cx + 60, top + 120), paint);
-                    String label = TextUtils.ellipsize(labels.get(i), text, 210, TextUtils.TruncateAt.END).toString();
-                    canvas.drawText(label, cx, top + 158, text);
+                    String caption = TextUtils.ellipsize(label, text, 210, TextUtils.TruncateAt.END).toString();
+                    canvas.drawText(caption, cx, top + 158, text);
                 } finally { icon.recycle(); }
             }
-
         } catch (RuntimeException error) {
             result.recycle();
             throw error;
         } finally {
+            if (scaledOverlay != null) scaledOverlay.recycle();
             if (layer != null) layer.recycle();
             if (backdrop != null) backdrop.recycle();
         }
@@ -210,6 +277,7 @@ final class ShapePreview implements AutoCloseable {
     @Override public void close() {
         for (Bitmap bitmap : originals) bitmap.recycle();
         for (Bitmap bitmap : unmasked) bitmap.recycle();
+        for (Bitmap bitmap : packIcons) bitmap.recycle();
         if (wallpaper != null) wallpaper.recycle();
         if (overlay != null) overlay.recycle();
         if (background != null) background.recycle();

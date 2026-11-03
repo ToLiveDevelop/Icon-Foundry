@@ -1,0 +1,173 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" role="img" aria-labelledby="title description">
+  <title id="title">Как фильтры, маска, подложка и накладка формируют финальную иконку</title>
+  <desc id="description">Четыре последовательных этапа: фильтры меняют цвет и позицию системного исходника, маска придаёт форму, подложка добавляется снизу, а декоративная накладка — сверху. Справа показана готовая иконка.</desc>
+  <defs>
+    <radialGradient id="page-glow" cx="78%" cy="0%" r="90%">
+      <stop offset="0" stop-color="#3b3012"/>
+      <stop offset=".48" stop-color="#15130c"/>
+      <stop offset="1" stop-color="#0b0b0b"/>
+    </radialGradient>
+    <linearGradient id="art-gradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#c0b5ff"/>
+      <stop offset=".48" stop-color="#8b72ed"/>
+      <stop offset="1" stop-color="#5942b8"/>
+    </linearGradient>
+    <linearGradient id="base-gradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe082"/>
+      <stop offset=".5" stop-color="#ffc107"/>
+      <stop offset="1" stop-color="#ed9b22"/>
+    </linearGradient>
+    <linearGradient id="sheen-gradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".42"/>
+      <stop offset=".55" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <pattern id="checker" width="20" height="20" patternUnits="userSpaceOnUse">
+      <rect width="20" height="20" fill="#202020"/>
+      <path d="M0 0h10v10H0zM10 10h10v10H10z" fill="#292929"/>
+    </pattern>
+    <filter id="shadow" x="-35%" y="-35%" width="170%" height="190%">
+      <feDropShadow dx="0" dy="14" stdDeviation="14" flood-color="#000" flood-opacity=".42"/>
+    </filter>
+    <filter id="final-glow" x="-70%" y="-70%" width="240%" height="240%">
+      <feGaussianBlur stdDeviation="24"/>
+    </filter>
+    <symbol id="glyph" viewBox="0 0 200 200">
+      <path d="M28 28h62v62H28zM110 28h62v62h-62zM28 110h62v62H28z"/>
+      <path d="m141 102 39 39-39 39-39-39z"/>
+    </symbol>
+    <clipPath id="mask-clip">
+      <rect x="317" y="280" width="140" height="140" rx="39"/>
+    </clipPath>
+    <style>
+      text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+      .eyebrow{fill:#ffc107;font-size:12px;font-weight:700;letter-spacing:2.2px}
+      .step{fill:#ffc107;font-size:12px;font-weight:700;letter-spacing:1.7px}
+      .name{fill:#f5f5f5;font-size:21px;font-weight:650}
+      .caption{fill:#aaa;font-size:15px}
+      .chip{fill:#f5f5f5;font-size:16px;font-weight:600}
+    </style>
+  </defs>
+
+  <rect x="1" y="1" width="1198" height="758" rx="34" fill="url(#page-glow)" stroke="#303030" stroke-width="2"/>
+  <path d="M48 184h1104" stroke="#2b2922"/>
+  <text x="48" y="64" class="eyebrow">АНАТОМИЯ ФИНАЛЬНОЙ ИКОНКИ</text>
+  <text x="48" y="116" fill="#f5f5f5" font-size="38" font-weight="700" letter-spacing="-1.2">Четыре настройки. Один результат.</text>
+  <text x="48" y="157" fill="#b5b5b5" font-size="17">Преобразуйте исходник, задайте форму и добавьте характер — слой за слоем.</text>
+
+  <g>
+    <rect x="48" y="210" width="210" height="320" rx="24" fill="#151515" stroke="#303030"/>
+    <text x="72" y="250" class="step">01 / ФИЛЬТРЫ</text>
+    <rect x="83" y="280" width="140" height="140" rx="32" fill="url(#checker)" stroke="#414141"/>
+    <use href="#glyph" x="99" y="296" width="108" height="108" fill="url(#art-gradient)"/>
+    <g transform="translate(202 293)" filter="url(#shadow)">
+      <circle r="22" fill="#ffc107"/>
+      <g stroke="#211a05" stroke-width="2" stroke-linecap="round">
+        <path d="M-10-7H10M-10 0H10M-10 7H10"/>
+        <circle cx="-3" cy="-7" r="3" fill="#ffc107"/>
+        <circle cx="5" cy="0" r="3" fill="#ffc107"/>
+        <circle cx="-5" cy="7" r="3" fill="#ffc107"/>
+      </g>
+    </g>
+    <text x="72" y="464" class="name">Цвет и позиция</text>
+    <text x="72" y="492" class="caption">меняют системный исходник</text>
+  </g>
+
+  <g transform="translate(270 350)">
+    <circle r="12" fill="#29261d"/>
+    <path d="M-4 0H4M0-4V4" stroke="#ffc107" stroke-width="1.8" stroke-linecap="round"/>
+  </g>
+
+  <g>
+    <rect x="282" y="210" width="210" height="320" rx="24" fill="#151515" stroke="#303030"/>
+    <text x="306" y="250" class="step">02 / МАСКА</text>
+    <rect x="309" y="272" width="156" height="156" rx="14" fill="none" stroke="#595959" stroke-dasharray="5 6"/>
+    <rect x="317" y="280" width="140" height="140" rx="39" fill="url(#checker)"/>
+    <g clip-path="url(#mask-clip)">
+      <use href="#glyph" x="325" y="288" width="124" height="124" fill="url(#art-gradient)"/>
+    </g>
+    <rect x="317" y="280" width="140" height="140" rx="39" fill="none" stroke="#c0b5ff" stroke-width="2"/>
+    <path d="M317 304v-8c0-9 7-16 16-16h8M433 280h8c9 0 16 7 16 16v8M457 396v8c0 9-7 16-16 16h-8M341 420h-8c-9 0-16-7-16-16v-8" fill="none" stroke="#ffe082" stroke-width="3" stroke-linecap="round"/>
+    <text x="306" y="464" class="name">Форма</text>
+    <text x="306" y="492" class="caption">сохраняет нужный силуэт</text>
+  </g>
+
+  <g transform="translate(504 350)">
+    <circle r="12" fill="#29261d"/>
+    <path d="M-4 0H4M0-4V4" stroke="#ffc107" stroke-width="1.8" stroke-linecap="round"/>
+  </g>
+
+  <g>
+    <rect x="516" y="210" width="210" height="320" rx="24" fill="#151515" stroke="#303030"/>
+    <text x="540" y="250" class="step">03 / ПОДЛОЖКА</text>
+    <rect x="559" y="288" width="140" height="140" rx="39" fill="none" stroke="#6d5313" stroke-width="2"/>
+    <rect x="551" y="280" width="140" height="140" rx="39" fill="url(#base-gradient)" filter="url(#shadow)"/>
+    <use href="#glyph" x="567" y="296" width="108" height="108" fill="url(#art-gradient)"/>
+    <path d="M551 319c0-22 17-39 39-39h62l-101 101z" fill="url(#sheen-gradient)"/>
+    <text x="540" y="464" class="name">Фон</text>
+    <text x="540" y="492" class="caption">размещается под иконкой</text>
+  </g>
+
+  <g transform="translate(738 350)">
+    <circle r="12" fill="#29261d"/>
+    <path d="M-4 0H4M0-4V4" stroke="#ffc107" stroke-width="1.8" stroke-linecap="round"/>
+  </g>
+
+  <g>
+    <rect x="750" y="210" width="210" height="320" rx="24" fill="#151515" stroke="#303030"/>
+    <text x="774" y="250" class="step">04 / НАКЛАДКА</text>
+    <rect x="785" y="280" width="140" height="140" rx="39" fill="url(#base-gradient)" filter="url(#shadow)"/>
+    <use href="#glyph" x="801" y="296" width="108" height="108" fill="url(#art-gradient)"/>
+    <path d="M785 319c0-22 17-39 39-39h62l-101 101z" fill="url(#sheen-gradient)"/>
+    <rect x="793" y="288" width="124" height="124" rx="32" fill="none" stroke="#fff" stroke-opacity=".8" stroke-width="4"/>
+    <path d="m894 281 4 11 11 4-11 4-4 11-4-11-11-4 11-4z" fill="#fff"/>
+    <circle cx="808" cy="394" r="5" fill="#fff" fill-opacity=".8"/>
+    <text x="774" y="464" class="name">Декор</text>
+    <text x="774" y="492" class="caption">добавляется поверх иконки</text>
+  </g>
+
+  <g>
+    <rect x="984" y="210" width="168" height="320" rx="24" fill="#ffc107" fill-opacity=".055" stroke="#5a4819"/>
+    <text x="1068" y="250" class="step" text-anchor="middle">ИТОГ</text>
+    <rect x="994" y="282" width="148" height="148" rx="43" fill="#ffc107" fill-opacity=".2" filter="url(#final-glow)"/>
+    <rect x="992" y="276" width="152" height="152" rx="43" fill="url(#base-gradient)" filter="url(#shadow)"/>
+    <use href="#glyph" x="1009" y="293" width="118" height="118" fill="url(#art-gradient)"/>
+    <path d="M992 318c0-24 19-42 43-42h67l-110 110z" fill="url(#sheen-gradient)"/>
+    <rect x="1000" y="284" width="136" height="136" rx="36" fill="none" stroke="#fff" stroke-opacity=".85" stroke-width="4"/>
+    <path d="m1114 274 5 13 13 5-13 5-5 13-5-13-13-5 13-5z" fill="#fff"/>
+    <circle cx="1015" cy="402" r="5" fill="#fff" fill-opacity=".85"/>
+    <text x="1068" y="466" fill="#f5f5f5" font-size="20" font-weight="650" text-anchor="middle">Готовая иконка</text>
+    <g transform="translate(1023 480)">
+      <rect width="90" height="28" rx="14" fill="#ffc107" fill-opacity=".12"/>
+      <path d="m14 14 4 4 7-8" fill="none" stroke="#ffc107" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="34" y="19" fill="#ffe082" font-size="12" font-weight="700">ЭКСПОРТ</text>
+    </g>
+  </g>
+
+  <g>
+    <rect x="48" y="570" width="1104" height="120" rx="24" fill="#151515" stroke="#303030"/>
+    <text x="72" y="607" class="eyebrow">ПОРЯДОК СЛОЁВ · СНИЗУ ВВЕРХ</text>
+    <g transform="translate(72 624)">
+      <rect width="202" height="46" rx="14" fill="#222222"/>
+      <rect x="14" y="11" width="24" height="24" rx="8" fill="url(#base-gradient)"/>
+      <text x="50" y="30" class="chip">Подложка</text>
+    </g>
+    <path d="M290 647h22m-6-6 6 6-6 6" fill="none" stroke="#6f6250" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <g transform="translate(328 624)">
+      <rect width="414" height="46" rx="14" fill="#222222"/>
+      <use href="#glyph" x="14" y="10" width="26" height="26" fill="url(#art-gradient)"/>
+      <text x="52" y="30" class="chip">Иконка после фильтров и маски</text>
+    </g>
+    <path d="M758 647h22m-6-6 6 6-6 6" fill="none" stroke="#6f6250" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <g transform="translate(796 624)">
+      <rect width="194" height="46" rx="14" fill="#222222"/>
+      <rect x="15" y="11" width="24" height="24" rx="8" fill="none" stroke="#fff" stroke-width="2"/>
+      <path d="m35 7 2 5 5 2-5 2-2 5-2-5-5-2 5-2z" fill="#fff"/>
+      <text x="52" y="30" class="chip">Накладка</text>
+    </g>
+    <g transform="translate(1020 624)">
+      <rect width="108" height="46" rx="14" fill="#ffc107" fill-opacity=".1" stroke="#5a4819"/>
+      <text x="54" y="30" fill="#ffe082" font-size="16" font-weight="700" text-anchor="middle">ГОТОВО</text>
+    </g>
+  </g>
+  <text x="48" y="727" fill="#858585" font-size="13">Фильтры применяются к системным иконкам без замены из пака или файла.</text>
+</svg>

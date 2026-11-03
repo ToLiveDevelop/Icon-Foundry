@@ -548,6 +548,7 @@ public final class DeviceTests extends Instrumentation {
                             "Changing settings preserves the open draft editor");
                 });
                 if (mode.equals("dark")) {
+                    verifyStyleUi(result);
                     verifyShapePickerUi(result);
                     verifyIconScaleUi(result);
                     verifyOverlayUi(result);
@@ -580,6 +581,58 @@ public final class DeviceTests extends Instrumentation {
             catch (Throwable error) { failed.set(error); }
         });
         if (failed.get() != null) throw new AssertionError(failed.get());
+    }
+
+    private void verifyStyleUi(MainActivity activity) throws Exception {
+        runOnMainChecked(() -> {
+            @SuppressWarnings("unchecked")
+            List<android.widget.Button> tabs = (List<android.widget.Button>) field(activity, "editorTabs");
+            tabs.get(1).performClick();
+        });
+        waitForThumbnails(activity);
+        runOnMainChecked(() -> {
+            android.widget.ImageView preview = (android.widget.ImageView) field(activity, "stylePreview");
+            check(preview.getDrawable() instanceof android.graphics.drawable.BitmapDrawable
+                            && activity.getString(R.string.style_preview).contentEquals(preview.getContentDescription()),
+                    "Style tab shows its universal six-icon preview");
+            check(Math.abs(preview.getWidth() * (float) ShapePreview.HEIGHT / ShapePreview.WIDTH
+                            - preview.getHeight()) <= 1,
+                    "Universal style preview preserves the scene aspect ratio");
+            @SuppressWarnings("unchecked")
+            List<android.view.View> pages = (List<android.view.View>) field(activity, "editorPages");
+            android.view.ViewGroup page = (android.view.ViewGroup) pages.get(1);
+            android.view.View stage = page.findViewWithTag("style-stage");
+            android.view.View tabs = page.findViewWithTag("style-tabs");
+            android.widget.ScrollView scroll = page.findViewWithTag("style-scroll");
+            check(stage.getParent() == page && tabs.getParent() == page && scroll.getParent() == page
+                            && preview.getParent() == stage,
+                    "Style preview and inner tabs are pinned above the scrolling controls");
+            int pinnedTop = stage.getTop();
+            scroll.fullScroll(android.view.View.FOCUS_DOWN);
+            check(stage.getTop() == pinnedTop && preview.isShown(),
+                    "Scrolling style controls does not move or hide the preview");
+            check(findText(page, activity.getString(R.string.cover)) == null
+                            && findText(page, activity.getString(R.string.wallpaper)) == null
+                            && findText(pages.get(0), activity.getString(R.string.cover)) != null
+                            && findText(pages.get(0), activity.getString(R.string.wallpaper)) != null,
+                    "Cover and wallpaper belong to Basics rather than Style");
+            @SuppressWarnings("unchecked")
+            List<android.widget.Button> innerTabs = (List<android.widget.Button>) field(activity, "styleTabs");
+            @SuppressWarnings("unchecked")
+            List<android.widget.LinearLayout> sections =
+                    (List<android.widget.LinearLayout>) field(activity, "styleSections");
+            check(innerTabs.size() == 3 && sections.size() == 3,
+                    "Style has Background, Overlay and Icon options tabs");
+            for (int i = 0; i < innerTabs.size(); i++) {
+                innerTabs.get(i).performClick();
+                for (int section = 0; section < sections.size(); section++) {
+                    check(sections.get(section).isShown() == (section == i)
+                                    && innerTabs.get(section).isSelected() == (section == i),
+                            "Style tab selects exactly one settings section: " + i);
+                }
+                check(preview.isShown(), "Style preview remains visible on inner tab " + i);
+            }
+        });
     }
 
     private void verifyShapeExamples(Context context, IconRepository.Pack pack) throws Exception {
@@ -622,8 +675,20 @@ public final class DeviceTests extends Instrumentation {
                 "Fully themed apps still provide six alphabetical system icons");
         check(ShapePreview.examples(apps.subList(0, 3), sparse, Map.of(), java.util.Locale.ENGLISH).size() == 3,
                 "Small app lists are not padded with duplicate icons");
-        List<IconRepository.App> actual = ShapePreview.examples(new IconRepository(context).apps(), pack, Map.of(),
-                java.util.Locale.ENGLISH);
+        List<IconRepository.App> installed = new IconRepository(context).apps();
+        List<IconRepository.App> actual = ShapePreview.examples(installed, pack, Map.of(), java.util.Locale.ENGLISH);
+        try (ShapePreview scene = ShapePreview.loadStyle(context, installed, pack, Map.of(), pack.fallbackSize(),
+                "", "", "", "", List.of())) {
+            check(((List<?>) field(scene, "originals")).size() == 3
+                            && ((List<?>) field(scene, "packIcons")).size() == 3,
+                    "Universal style preview loads three system icons and three pack replacements");
+            Bitmap rendered = scene.renderStyle(IconShape.ROUNDED_SQUARE, null, 100, true,
+                    100, true, null, 100, false, false, 100);
+            try {
+                check(rendered.getWidth() == ShapePreview.WIDTH && rendered.getHeight() == ShapePreview.HEIGHT,
+                        "Universal style preview keeps the established two-row scene geometry");
+            } finally { rendered.recycle(); }
+        }
         File wallpaper = new File(context.getFilesDir(), "shape-preview-test.png");
         Bitmap solid = Bitmap.createBitmap(120, 240, Bitmap.Config.ARGB_8888);
         solid.eraseColor(android.graphics.Color.MAGENTA);
@@ -701,6 +766,7 @@ public final class DeviceTests extends Instrumentation {
         String savedJson = activity.getSharedPreferences("draft", 0).getString("json", "");
         var build = MainActivity.class.getDeclaredMethod("buildScreen");
         build.setAccessible(true);
+        Bitmap[] universalBefore = {null};
         try {
             runOnMainChecked(() -> {
                 setField(activity, "draft", isolated);
@@ -720,6 +786,11 @@ public final class DeviceTests extends Instrumentation {
                         "Shape popup loads its six-icon wallpaper scene before enabling Apply");
                 check(Math.abs(scene.getWidth() * (float) ShapePreview.HEIGHT / ShapePreview.WIDTH - scene.getHeight()) <= 1,
                         "Wallpaper scene preserves square icon proportions without stretching");
+                android.widget.ImageView universal = (android.widget.ImageView) field(activity, "stylePreview");
+                check(universal.getDrawable() instanceof android.graphics.drawable.BitmapDrawable,
+                        "Universal preview is loaded alongside the shape dialog");
+                universalBefore[0] = ((android.graphics.drawable.BitmapDrawable) universal.getDrawable()).getBitmap()
+                        .copy(Bitmap.Config.ARGB_8888, false);
                 Bitmap initial = ((android.graphics.drawable.BitmapDrawable) scene.getDrawable()).getBitmap()
                         .copy(Bitmap.Config.ARGB_8888, false);
                 try {
@@ -847,6 +918,12 @@ public final class DeviceTests extends Instrumentation {
             });
             waitForThumbnails(activity);
             runOnMainChecked(() -> {
+                android.widget.ImageView universal = (android.widget.ImageView) field(activity, "stylePreview");
+                Bitmap current = ((android.graphics.drawable.BitmapDrawable) universal.getDrawable()).getBitmap();
+                check(!universalBefore[0].sameAs(current),
+                        "Applying shape and layer settings refreshes the pinned universal preview");
+                universalBefore[0].recycle();
+                universalBefore[0] = null;
                 android.app.Dialog dialog = (android.app.Dialog) field(activity, "shapeDialog");
                 check(dialog.getWindow().getDecorView().findViewWithTag(IconShape.HEART).isSelected(),
                         "Reopened popup selects the applied shape");
@@ -933,6 +1010,7 @@ public final class DeviceTests extends Instrumentation {
                 original.save(activity);
                 build.invoke(activity);
             });
+            if (universalBefore[0] != null) universalBefore[0].recycle();
         }
     }
 
@@ -1008,9 +1086,11 @@ public final class DeviceTests extends Instrumentation {
                     android.view.View backgroundCard = (android.view.View)
                             ((android.view.View) field(field(activity, "backgroundSection"), "content")).getParent();
                     check(form.indexOfChild(coverCard) + 1 == form.indexOfChild(wallpaperCard)
-                                    && form.indexOfChild(wallpaperCard) + 1 == form.indexOfChild(backgroundCard)
-                                    && form.indexOfChild(backgroundCard) + 1 == form.indexOfChild(overlayCard),
-                            "Cover, wallpaper, background and overlay sections appear in layer order");
+                                    && "style-section-0".equals(backgroundCard.getParent() instanceof android.view.ViewGroup backgroundGroup
+                                    ? backgroundGroup.getTag() : null)
+                                    && "style-section-1".equals(overlayCard.getParent() instanceof android.view.ViewGroup overlayGroup
+                                    ? overlayGroup.getTag() : null),
+                            "Cover and wallpaper stay together on Basics; layers occupy their Style tabs");
                     String unchanged = isolated.toJson().toString();
                     for (String section : List.of("coverSection", "wallpaperSection", "backgroundSection", "overlaySection")) {
                         Object optional = field(activity, section);
@@ -3398,14 +3478,10 @@ public final class DeviceTests extends Instrumentation {
                 check(folder != null && folder.isChecked() == ((Draft) field(activity, "draft")).clearFolderBackground,
                         "Folder background toggle reflects persisted setting");
                 android.widget.Button shapePicker = (android.widget.Button) field(activity, "shapeButton");
-                android.widget.ImageView shapeImage = (android.widget.ImageView) field(activity, "shapePreview");
-                float previewDensity = context.getResources().getDisplayMetrics().density;
-                check(shapeImage.getScaleType() == android.widget.ImageView.ScaleType.FIT_CENTER
-                        && shapeImage.getPaddingLeft() >= 8 * previewDensity - 1
-                        && shapeImage.getPaddingTop() >= 8 * previewDensity - 1
-                        && shapeImage.getPaddingRight() >= 8 * previewDensity - 1
-                        && shapeImage.getPaddingBottom() >= 8 * previewDensity - 1,
-                        "Shape preview preserves aspect ratio and safe margin on every edge without changing exported mask");
+                android.widget.ImageView styleImage = (android.widget.ImageView) field(activity, "stylePreview");
+                check(styleImage.getScaleType() == android.widget.ImageView.ScaleType.FIT_CENTER
+                                && styleImage.getTag() != null,
+                        "Universal style preview is attached to the editor");
                 check(shapePicker != null && shapePicker.getText().toString().contains(activity.getString(shown.shape.label)),
                         "Shape picker button shows the currently saved shape");
                 check(findShapePicker(activity.getWindow().getDecorView()) == null,
@@ -3746,6 +3822,7 @@ public final class DeviceTests extends Instrumentation {
     }
 
     private int progressCount(android.view.View view) {
+        if ("style-preview-loading".equals(view.getTag())) return 0;
         int count = view instanceof android.widget.ProgressBar progress && progress.isIndeterminate() ? 1 : 0;
         if (view instanceof android.view.ViewGroup group) {
             for (int i = 0; i < group.getChildCount(); i++) count += progressCount(group.getChildAt(i));
@@ -4747,15 +4824,10 @@ public final class DeviceTests extends Instrumentation {
             title.setText("Button check");
             check(!export.isEnabled(), "Export disabled without loaded icon pack");
             setField(activity, "pack", loadedPack);
-            @SuppressWarnings("unchecked")
-            List<IconRepository.App> installedApps = (List<IconRepository.App>) field(activity, "apps");
-            android.widget.ImageView shapeExample = (android.widget.ImageView) field(activity, "shapePreview");
-            check(installedApps.stream().filter(app -> loadedPack.automatic(app) == null)
-                            .anyMatch(app -> activity.getString(R.string.shape_example,
-                                    activity.getString(editingDraft.shape.label), app.label())
-                                    .contentEquals(shapeExample.getContentDescription()))
-                            && shapeExample.getColorFilter() == null,
-                    "Shape UI uses an unthemed installed application without recoloring");
+            android.widget.ImageView styleExample = (android.widget.ImageView) field(activity, "stylePreview");
+            check(activity.getString(R.string.style_preview).contentEquals(styleExample.getContentDescription())
+                            && styleExample.getColorFilter() == null,
+                    "Universal style preview is available without tinting its ImageView");
             title.setText(" ");
             check(!export.isEnabled(), "Export disabled for whitespace title");
             title.setText("Button check");
@@ -4794,15 +4866,35 @@ public final class DeviceTests extends Instrumentation {
                                 >= 8 * density - 1,
                         "Theme title help row keeps spacing before the text field");
                 android.widget.LinearLayout body = (android.widget.LinearLayout) title.getParent().getParent();
-                check(findText(body.getChildAt(1), activity.getString(R.string.add_pack)) != null,
-                        "Pack selection is the first form card");
+                check(body.getChildAt(1) == identity
+                                && findText(body.getChildAt(2), activity.getString(R.string.add_pack)) != null,
+                        "Theme name precedes pack selection on the Basics tab");
+                android.widget.LinearLayout editorRoot = (android.widget.LinearLayout) field(activity, "root");
+                @SuppressWarnings("unchecked")
+                List<android.view.View> pages = (List<android.view.View>) field(activity, "editorPages");
+                @SuppressWarnings("unchecked")
+                List<android.widget.Button> tabs = (List<android.widget.Button>) field(activity, "editorTabs");
+                check(pages.size() == 4 && tabs.size() == 4, "Editor has four pages and matching bottom tabs");
+                for (int i = 0; i < tabs.size(); i++) {
+                    tabs.get(i).performClick();
+                    for (int page = 0; page < pages.size(); page++) {
+                        check(pages.get(page).isShown() == (page == i) && tabs.get(page).isSelected() == (page == i),
+                                "Bottom tab selects exactly one editor page: " + i);
+                    }
+                }
                 int[] helps = {R.string.intro, R.string.pack_priority_help, R.string.filename_help, R.string.wallpaper_help,
                         R.string.background_help, R.string.overlay_help, R.string.scope_help, R.string.fallback_shape_help,
                         R.string.folder_background_help, R.string.apps_help, R.string.destination_help};
-                for (int help : helps) {
-                    android.view.View button = body.findViewWithTag("help-" + activity.getResources().getResourceEntryName(help));
-                    check(button != null && button.isShown() && button.getWidth() >= 48 * density - 1
-                                    && findText(body, activity.getString(help)) == null,
+                int[] helpTabs = {0, 0, 0, 0, 1, 1, 3, 1, 1, 2, 3};
+                int[] styleHelpTabs = {-1, -1, -1, -1, 0, 1, -1, 2, 2, -1, -1};
+                for (int i = 0; i < helps.length; i++) {
+                    int help = helps[i];
+                    tabs.get(helpTabs[i]).performClick();
+                    if (styleHelpTabs[i] >= 0) editorRoot.findViewWithTag("style-tab-" + styleHelpTabs[i]).performClick();
+                    android.view.View button = editorRoot.findViewWithTag(
+                            "help-" + activity.getResources().getResourceEntryName(help));
+                    check(button != null && button.isShown() && button.getLayoutParams().width >= 48 * density - 1
+                                    && findText(editorRoot, activity.getString(help)) == null,
                             "Editor block has its own help button instead of small inline text: "
                                     + activity.getResources().getResourceEntryName(help));
                     android.widget.ImageButton helpButton = (android.widget.ImageButton) button;
@@ -4811,7 +4903,7 @@ public final class DeviceTests extends Instrumentation {
                                     && helpButton.getPaddingRight() >= 14 * density - 1,
                             "Help icon is smaller and muted while retaining a 48dp touch target");
                 }
-                body.findViewWithTag("help-scope_help").performClick();
+                editorRoot.findViewWithTag("help-scope_help").performClick();
                 android.app.Dialog helpDialog = (android.app.Dialog) field(activity, "helpDialog");
                 check(helpDialog != null && helpDialog.isShowing()
                                 && findText(helpDialog.getWindow().getDecorView(), activity.getString(R.string.scope_help)) != null,

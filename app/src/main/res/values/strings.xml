@@ -45,6 +45,10 @@
     <string name="background_archive_error">The theme archive background is missing or damaged.</string>
     <string name="tagline">Icon packs → HONOR themes</string>
     <string name="intro">Icon themes for MagicOS 10+, with optional wallpaper. Apply manually.</string>
+    <string name="tab_base">Basics</string>
+    <string name="tab_style">Style</string>
+    <string name="tab_apps">Icons</string>
+    <string name="tab_export">Export</string>
     <string name="new_theme">New theme</string>
     <string name="templates">Templates</string>
     <string name="delete_template">Delete</string>
@@ -75,7 +79,7 @@
     <string name="crop_zoom">Cover zoom</string>
     <string name="crop_use">Use cover</string>
     <string name="choose_cover">Choose image</string>
-    <string name="pack">Base icon packs</string>
+    <string name="pack">Icon sources</string>
     <string name="theme_options">Icon options</string>
     <string name="choose_pack">Choose icon pack</string>
     <string name="no_pack">No icon pack selected</string>
@@ -90,8 +94,8 @@
     <string name="pack_priority_help">Priority runs top to bottom: each app uses the first pack that contains its icon. Drag ≡ to reorder.</string>
     <string name="apps">App icons</string>
     <string name="apps_help">Tap an app to replace its icon. The current source pack opens first; other packs load when selected. Resource references pick up pack updates; replace assignments if a pack or resource is removed. File icons are stored in the template. Assignments and exclusions apply in both export modes.</string>
-    <string name="export_scope">Theme contents</string>
-    <string name="fallback_shape">Shape for icons without replacements</string>
+    <string name="export_scope">Which apps to include</string>
+    <string name="fallback_shape">Shape for other icons</string>
     <string name="folder_background">Remove grey stacked-folder background</string>
     <string name="folder_background_help">Apply the full theme, not just icons, to remove the stacked-folder background. Without your own wallpaper, HONOR may set a fallback. Also removes the unknown-shortcut background in night mode.</string>
     <string name="fallback_shape_help">The icon_mask.png mask clips system icons without replacements, including future apps. Choose a preset, edit corner radii, or load a square PNG whose alpha channel defines the silhouette. Its size matches the typical visible pack icon. Pack icons are unchanged; No mask keeps their original shape.</string>
@@ -155,13 +159,14 @@
     <string name="shape_preview_gradient">Background: preview gradient, not included in the theme</string>
     <string name="shape_no_apps">No installed applications are available for the preview.</string>
     <string name="shape_preview_error">Could not load the system icons for the preview.</string>
+    <string name="style_preview">Style preview: system icons above, pack replacements below</string>
     <string name="scope_installed">Installed apps only</string>
     <string name="scope_full">All pack icons, including future apps</string>
     <string name="scope_help">All appfilter mappings, including uninstalled apps; packs are merged by priority without duplicates. Unmapped alternatives can be assigned manually. Export takes longer and produces a larger file.</string>
     <string name="export_count">\nExport: %1$d app mappings</string>
     <string name="search_apps">Search by name or package</string>
     <string name="only_missing">Only without a pack icon</string>
-    <string name="system_icons">System icon</string>
+    <string name="system_icons">Show system icons</string>
     <string name="not_installed_app">%1$s · not installed</string>
     <string name="destination">Export folder</string>
     <string name="destination_help">Internal storage → Honor → Themes → Use this folder. Full storage access is not needed.</string>
