@@ -627,8 +627,8 @@ public final class DeviceTests extends Instrumentation {
             @SuppressWarnings("unchecked")
             List<android.widget.LinearLayout> sections =
                     (List<android.widget.LinearLayout>) field(activity, "styleSections");
-            check(innerTabs.size() == 3 && sections.size() == 3,
-                    "Style has Background, Overlay and Icon options tabs");
+            check(innerTabs.size() == 4 && sections.size() == 4,
+                    "Style has Background, Overlay, Icon options and Filters tabs");
             for (int i = 0; i < innerTabs.size(); i++) {
                 innerTabs.get(i).performClick();
                 for (int section = 0; section < sections.size(); section++) {
@@ -657,6 +657,18 @@ public final class DeviceTests extends Instrumentation {
         try (ShapePreview scene = ShapePreview.loadStyle(context, installed, pack, noneAssigned,
                 pack.fallbackSize(), "", "", "", "", List.of())) {
             check(((List<?>) field(scene, "packIcons")).size() == 3, "Catalogue fills missing installed pack examples");
+        }
+        for (Map<String, String> assigned : List.of(allAssigned, noneAssigned)) {
+            try (ShapePreview normal = ShapePreview.loadStyle(context, installed, pack, assigned,
+                    pack.fallbackSize(), "", "", "", "", List.of());
+                 ShapePreview filters = ShapePreview.loadStyle(context, installed, pack, assigned,
+                         pack.fallbackSize(), "", "", "", "", List.of(), true)) {
+                List<?> originals = (List<?>) field(normal, "originals");
+                List<?> filtered = (List<?>) field(filters, "originals");
+                for (int i = 0; i < 3; i++)
+                    check(((Bitmap) originals.get(i)).sameAs((Bitmap) filtered.get(i)),
+                            "Switching to Filters leaves the first system row unchanged: " + i);
+            }
         }
         MainActivity activity = (MainActivity) startActivitySync(new android.content.Intent(context, MainActivity.class)
                 .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK));
@@ -697,9 +709,23 @@ public final class DeviceTests extends Instrumentation {
                 android.widget.ImageView preview = (android.widget.ImageView) field(activity, "stylePreview");
                 check(activity.getWindow().getDecorView().findViewWithTag("style-icon-scale").isShown(),
                         "Icon scale belongs to inline settings");
-                check(activity.getWindow().getDecorView().findViewWithTag("style-corner-0").isShown(),
-                        "Corner editor belongs to inline settings");
+                android.view.View decor = activity.getWindow().getDecorView();
+                check(decor.findViewWithTag("style-shape-presets").isShown()
+                                && !decor.findViewWithTag("style-shape-editor").isShown()
+                                && !decor.findViewWithTag("style-shape-file").isShown(),
+                        "Shape presets retain the illustrated grid with separate editor and PNG tabs");
+                check(((android.view.ViewGroup) decor.findViewWithTag("style-shape-presets")).getChildCount() == 3,
+                        "Ten illustrated shape choices occupy three grid rows");
+                decor.findViewWithTag("style-shape-tab-file").performClick();
+                check(decor.findViewWithTag("style-shape-file").isShown()
+                                && !decor.findViewWithTag("style-shape-presets").isShown()
+                                && fixture.shape == IconShape.CIRCLE,
+                        "PNG tab exposes file controls without applying a missing mask");
+                decor.findViewWithTag("style-shape-tab-editor").performClick();
+                check(decor.findViewWithTag("style-corner-0").isShown(),
+                        "Corner editor is visible on its own inline tab");
             });
+            waitForThumbnails(activity);
             before = ((android.graphics.drawable.BitmapDrawable) ((android.widget.ImageView) field(activity,
                     "stylePreview")).getDrawable()).getBitmap().copy(Bitmap.Config.ARGB_8888, false);
             runOnMainChecked(() -> activity.getWindow().getDecorView()
@@ -737,6 +763,48 @@ public final class DeviceTests extends Instrumentation {
                     .findViewWithTag("style-corner-0-decrease").performClick());
             waitForThumbnails(activity);
             check(fixture.shape == IconShape.CUSTOM, "Inline corner arrows select custom shape immediately");
+            runOnMainChecked(() -> {
+                android.view.View decor = activity.getWindow().getDecorView();
+                check(decor.findViewWithTag("style-preview-loading") == null,
+                        "Changing style never overlays a loading spinner");
+                decor.findViewWithTag("style-tab-3").performClick();
+                check(decor.findViewWithTag("filter-add").isShown()
+                                && decor.findViewWithTag("filters") == null,
+                        "Filters have their own inline tab, not a modal launch button");
+                decor.findViewWithTag("filter-add").performClick();
+                android.app.AlertDialog chooser = (android.app.AlertDialog) field(activity, "filterTypeDialog");
+                chooser.getListView().performItemClick(null, 0, 0);
+                decor.findViewWithTag("filter-0-brightness-increase").performClick();
+                check(Draft.load(context).filters.size() == 1
+                                && ((IconFilters.ColorCorrection) Draft.load(context).filters.get(0)).values[0] == 1,
+                        "Inline filter creation and slider edits save immediately");
+            });
+            waitForThumbnails(activity);
+            for (boolean filtersMode : new boolean[]{true, false}) {
+                runOnMainChecked(() -> activity.getWindow().getDecorView()
+                        .findViewWithTag(filtersMode ? "style-tab-3" : "style-tab-0").performClick());
+                waitForThumbnails(activity);
+                android.widget.ImageView preview = (android.widget.ImageView) field(activity, "stylePreview");
+                Bitmap actual = ((android.graphics.drawable.BitmapDrawable) preview.getDrawable()).getBitmap();
+                check(Math.abs((float) actual.getWidth() / actual.getHeight()
+                                - (float) preview.getWidth() / preview.getHeight()) < .02,
+                        "Preview background fills the entire stage without letterboxing");
+                try (ShapePreview scene = ShapePreview.loadStyle(context, installed, pack, fixture.overrides,
+                        pack.fallbackSize(), fixture.wallpaperPath, fixture.overlay, fixture.background,
+                        "", fixture.filters, filtersMode)) {
+                    if (filtersMode) check(((List<?>) field(scene, "originals")).size() == 6
+                                    && ((List<?>) field(scene, "packIcons")).isEmpty(),
+                            "Filters use six system originals across both rows");
+                    Bitmap expected = scene.renderStyle(fixture.shape, fixture.corners, fixture.overlayScale,
+                            fixture.overlayClip, fixture.backgroundScale, fixture.backgroundClip, null,
+                            fixture.maskScale, fixture.overlayAll, fixture.backgroundAll, fixture.iconScale,
+                            !filtersMode, actual.getHeight());
+                    try { check(actual.sameAs(expected), filtersMode
+                            ? "Filters tab renders both rows as system icons with live effects"
+                            : "Leaving Filters restores pack icons in the second row"); }
+                    finally { expected.recycle(); }
+                }
+            }
             runOnMainChecked(() -> activity.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
             android.os.SystemClock.sleep(800);
             waitForIdleSync();
@@ -1223,7 +1291,13 @@ public final class DeviceTests extends Instrumentation {
                                     ? overlayGroup.getTag() : null),
                             "Cover and wallpaper stay together on Basics; layers occupy their Style tabs");
                     String unchanged = isolated.toJson().toString();
-                    for (String section : List.of("coverSection", "wallpaperSection", "backgroundSection", "overlaySection")) {
+                    for (String section : List.of("backgroundSection", "overlaySection")) {
+                        Object optional = field(activity, section);
+                        check(((android.view.View) field(optional, "content")).getVisibility() == android.view.View.VISIBLE
+                                        && ((android.view.View) field(optional, "toggle")).getParent() == null,
+                                "Style layers are always expanded without a card heading or collapse button: " + section);
+                    }
+                    for (String section : List.of("coverSection", "wallpaperSection")) {
                         Object optional = field(activity, section);
                         android.view.View content = (android.view.View) field(optional, "content");
                         android.view.View toggle = (android.view.View) field(optional, "toggle");
@@ -1289,7 +1363,7 @@ public final class DeviceTests extends Instrumentation {
                 check(isolated.overlay.isEmpty() && !isolated.overlayAll && scope.getVisibility() == android.view.View.GONE,
                         "Removing overlay clears its saved scope and controls");
                 build.invoke(activity);
-                for (String section : List.of("coverSection", "wallpaperSection", "overlaySection")) {
+                for (String section : List.of("coverSection", "wallpaperSection")) {
                     check(((android.view.View) field(field(activity, section), "content")).getVisibility()
                                     == android.view.View.GONE,
                             "Cleared optional section reopens collapsed: " + section);
@@ -1331,7 +1405,7 @@ public final class DeviceTests extends Instrumentation {
                 setField(activity, "draft", isolated);
                 build.invoke(activity);
                 check(((android.view.View) field(field(activity, "backgroundSection"), "content")).getVisibility()
-                                == android.view.View.GONE, "Empty background card starts collapsed");
+                                == android.view.View.VISIBLE, "Empty background controls remain visible");
                 check(((android.view.View) field(activity, "backgroundScope")).getVisibility() == android.view.View.GONE,
                         "Background scope is hidden before import");
                 isolated.save(activity);
@@ -1815,16 +1889,22 @@ public final class DeviceTests extends Instrumentation {
     }
 
     private void waitForThumbnails(MainActivity activity) throws Exception {
-        var executor = (java.util.concurrent.ExecutorService) field(activity, "thumbnails");
-        var ready = new java.util.concurrent.CountDownLatch(2);
-        List<java.util.concurrent.Future<?>> barriers = new ArrayList<>();
-        for (int i = 0; i < 2; i++) barriers.add(executor.submit(() -> {
-            ready.countDown();
-            if (!ready.await(30, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("Thumbnail queue timed out");
-            return null;
-        }));
-        for (var barrier : barriers) barrier.get(35, java.util.concurrent.TimeUnit.SECONDS);
-        waitForIdleSync();
+        var executor = (java.util.concurrent.ThreadPoolExecutor) field(activity, "thumbnails");
+        long deadline = android.os.SystemClock.uptimeMillis() + 35000;
+        do {
+            waitForIdleSync();
+            var ready = new java.util.concurrent.CountDownLatch(2);
+            List<java.util.concurrent.Future<?>> barriers = new ArrayList<>();
+            for (int i = 0; i < 2; i++) barriers.add(executor.submit(() -> {
+                ready.countDown();
+                if (!ready.await(30, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("Thumbnail queue timed out");
+                return null;
+            }));
+            for (var barrier : barriers) barrier.get(35, java.util.concurrent.TimeUnit.SECONDS);
+            waitForIdleSync();
+            if (executor.getActiveCount() == 0 && executor.getQueue().isEmpty()) return;
+        } while (android.os.SystemClock.uptimeMillis() < deadline);
+        throw new AssertionError("Thumbnail updates did not settle");
     }
 
     private void verifySettingsResources(Context context) {
@@ -2897,26 +2977,26 @@ public final class DeviceTests extends Instrumentation {
             runOnMainChecked(() -> {
                 setField(activity, "draft", isolated);
                 build.invoke(activity);
-                android.widget.Button button = activity.getWindow().getDecorView().findViewWithTag("filters");
+                android.view.View decor = activity.getWindow().getDecorView();
+                decor.findViewWithTag("editor-tab-1").performClick();
+                android.widget.Button button = decor.findViewWithTag("style-tab-3");
                 check(button != null && button.getText().toString().equals(activity.getString(R.string.filters)),
-                        "Icon parameters show the filters button");
+                        "Filters have a dedicated Style tab");
                 button.performClick();
             });
             waitForThumbnails(activity);
             runOnMainChecked(() -> {
-                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
-                android.view.View decor = dialog.getWindow().getDecorView();
-                check(decor.findViewWithTag("filter-example-0") != null && decor.findViewWithTag("filter-example-5") != null,
-                        "Filters show six preview icons");
+                android.view.View decor = activity.getWindow().getDecorView();
+                check(((android.widget.ImageView) field(activity, "stylePreview")).getDrawable() != null,
+                        "Filters use the common pinned preview");
                 decor.findViewWithTag("filter-add").performClick();
                 android.app.AlertDialog chooser = (android.app.AlertDialog) field(activity, "filterTypeDialog");
                 chooser.getListView().performItemClick(null, 0, 0);
             });
             waitForThumbnails(activity);
             runOnMainChecked(() -> {
-                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
-                android.view.View decor = dialog.getWindow().getDecorView();
-                android.widget.ImageView example = decor.findViewWithTag("filter-example-0");
+                android.view.View decor = activity.getWindow().getDecorView();
+                android.widget.ImageView example = (android.widget.ImageView) field(activity, "stylePreview");
                 check(example.getDrawable() != null, "Filter preview renders a system icon");
                 Bitmap before = ((android.graphics.drawable.BitmapDrawable) example.getDrawable()).getBitmap()
                         .copy(Bitmap.Config.ARGB_8888, false);
@@ -2931,9 +3011,8 @@ public final class DeviceTests extends Instrumentation {
             });
             waitForThumbnails(activity);
             runOnMainChecked(() -> {
-                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
-                android.view.View decor = dialog.getWindow().getDecorView();
-                android.widget.ImageView example = decor.findViewWithTag("filter-example-0");
+                android.view.View decor = activity.getWindow().getDecorView();
+                android.widget.ImageView example = (android.widget.ImageView) field(activity, "stylePreview");
                 try { check(!previewBefore.sameAs(((android.graphics.drawable.BitmapDrawable) example.getDrawable()).getBitmap()),
                         "Changing a filter updates the preview"); }
                 finally { previewBefore.recycle(); previewBefore = null; }
@@ -2946,31 +3025,29 @@ public final class DeviceTests extends Instrumentation {
                         "Moving a filter changes the chain order");
                 decor.findViewWithTag("filter-0-remove").performClick();
                 check(decor.findViewWithTag("filter-1") == null, "Removing a filter updates the list");
-                dialog.dismiss();
-                check(isolated.filters.isEmpty(), "Closing filters without applying discards changes");
-                activity.getWindow().getDecorView().findViewWithTag("filters").performClick();
-                decor = ((android.app.Dialog) field(activity, "filtersDialog")).getWindow().getDecorView();
+                check(isolated.filters.size() == 1
+                                && ((IconFilters.ColorCorrection) Draft.load(activity).filters.get(0)).values[2] == -100,
+                        "Reordering, removal and slider edits save without confirmation");
+                decor.findViewWithTag("filter-0-remove").performClick();
+                check(isolated.filters.isEmpty() && Draft.load(activity).filters.isEmpty(),
+                        "Removing the last filter saves an empty chain");
                 decor.findViewWithTag("filter-add").performClick();
                 ((android.app.AlertDialog) field(activity, "filterTypeDialog")).getListView().performItemClick(null, 0, 0);
                 android.widget.SeekBar contrast = decor.findViewWithTag("filter-0-contrast");
                 contrast.setProgress(29);
                 contrast.onKeyDown(android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
                         new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_RIGHT));
-                android.app.Dialog applied = (android.app.Dialog) field(activity, "filtersDialog");
-                decor.findViewWithTag("filters-apply").performClick();
                 check(isolated.filters.size() == 1 && Draft.load(activity).filters.size() == 1
-                                && ((IconFilters.ColorCorrection) isolated.filters.get(0)).values[1] == 30
-                                && !applied.isShowing(),
-                        "Applying filters saves the chain");
-                check(((android.widget.Button) activity.getWindow().getDecorView().findViewWithTag("filters")).getText()
-                                .toString().equals(activity.getString(R.string.filters_count, 1)),
-                        "Filters button shows the filter count");
+                                && ((IconFilters.ColorCorrection) isolated.filters.get(0)).values[1] == 30,
+                        "Editing filters saves the chain immediately");
+                decor.findViewWithTag("style-tab-2").performClick();
+                decor.findViewWithTag("style-tab-3").performClick();
+                check(((android.widget.SeekBar) decor.findViewWithTag("filter-0-contrast")).getProgress() == 30,
+                        "Switching tabs preserves the filter controls");
             });
             waitForThumbnails(activity);
         } finally {
             runOnMainChecked(() -> {
-                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
-                if (dialog != null) dialog.dismiss();
                 setField(activity, "draft", original);
                 original.save(activity); build.invoke(activity);
             });
@@ -3011,12 +3088,12 @@ public final class DeviceTests extends Instrumentation {
             runOnMainChecked(() -> {
                 setField(activity, "draft", isolated);
                 build.invoke(activity);
-                activity.getWindow().getDecorView().findViewWithTag("filters").performClick();
+                activity.getWindow().getDecorView().findViewWithTag("editor-tab-1").performClick();
+                activity.getWindow().getDecorView().findViewWithTag("style-tab-3").performClick();
             });
             waitForThumbnails(activity);
             runOnMainChecked(() -> {
-                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
-                android.view.View decor = dialog.getWindow().getDecorView();
+                android.view.View decor = activity.getWindow().getDecorView();
                 decor.findViewWithTag("filter-add").performClick();
                 android.app.AlertDialog chooser = (android.app.AlertDialog) field(activity, "filterTypeDialog");
                 check(chooser.getListView().getCount() == 2, "Filter menu offers color and position");
@@ -3024,8 +3101,7 @@ public final class DeviceTests extends Instrumentation {
             });
             waitForThumbnails(activity);
             runOnMainChecked(() -> {
-                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
-                android.view.View decor = dialog.getWindow().getDecorView();
+                android.view.View decor = activity.getWindow().getDecorView();
                 String[] fields = {"scale", "offsetX", "offsetY", "skewX", "skewY"};
                 for (int i = 0; i < fields.length; i++) {
                     android.widget.SeekBar slider = decor.findViewWithTag("filter-0-" + fields[i]);
@@ -3037,7 +3113,7 @@ public final class DeviceTests extends Instrumentation {
                     check(slider.getContentDescription().toString().contains(unit),
                             "Position slider announces its unit: " + fields[i]);
                 }
-                android.widget.ImageView example = decor.findViewWithTag("filter-example-0");
+                android.widget.ImageView example = (android.widget.ImageView) field(activity, "stylePreview");
                 check(example.getDrawable() instanceof android.graphics.drawable.BitmapDrawable,
                         "Position editor displays a system icon");
                 before[0] = ((android.graphics.drawable.BitmapDrawable) example.getDrawable()).getBitmap()
@@ -3050,9 +3126,8 @@ public final class DeviceTests extends Instrumentation {
             });
             waitForThumbnails(activity);
             runOnMainChecked(() -> {
-                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
-                android.view.View decor = dialog.getWindow().getDecorView();
-                android.widget.ImageView example = decor.findViewWithTag("filter-example-0");
+                android.view.View decor = activity.getWindow().getDecorView();
+                android.widget.ImageView example = (android.widget.ImageView) field(activity, "stylePreview");
                 check(!before[0].sameAs(((android.graphics.drawable.BitmapDrawable) example.getDrawable()).getBitmap()),
                         "Position controls update the pinned preview");
                 before[0].recycle();
@@ -3063,29 +3138,25 @@ public final class DeviceTests extends Instrumentation {
                 check(((android.widget.SeekBar) decor.findViewWithTag("filter-1-offsetX")).getProgress() == 20
                                 && ((android.widget.SeekBar) decor.findViewWithTag("filter-1-skewY")).getProgress() == -15,
                         "Moving position after color preserves all settings");
-                decor.findViewWithTag("filters-apply").performClick();
                 check(isolated.filters.size() == 2 && isolated.filters.get(0) instanceof IconFilters.ColorCorrection
                                 && isolated.filters.get(1) instanceof IconFilters.Position
                                 && java.util.Arrays.equals(((IconFilters.Position) isolated.filters.get(1)).values,
                                         new int[]{75, 20, -10, 15, -15})
                                 && IconFilters.key(Draft.load(activity).filters).equals(IconFilters.key(isolated.filters)),
-                        "Applying saves the mixed filter order and position settings");
-                activity.getWindow().getDecorView().findViewWithTag("filters").performClick();
-                android.app.Dialog reopened = (android.app.Dialog) field(activity, "filtersDialog");
-                android.view.View reopenedDecor = reopened.getWindow().getDecorView();
+                        "Editing saves the mixed filter order and position settings");
+                build.invoke(activity);
+                android.view.View reopenedDecor = activity.getWindow().getDecorView();
                 check(((android.widget.SeekBar) reopenedDecor.findViewWithTag("filter-1-scale")).getProgress() == 75
                                 && ((android.widget.SeekBar) reopenedDecor.findViewWithTag("filter-1-offsetY")).getProgress() == -10,
-                        "Reopening restores the position controls");
+                        "Rebuilding the editor restores the position controls");
                 stepPositionSlider(reopenedDecor, "filter-1-scale", 76);
-                reopened.dismiss();
-                check(((IconFilters.Position) isolated.filters.get(1)).values[0] == 75,
-                        "Closing without applying discards position changes");
+                reopenedDecor.findViewWithTag("style-tab-2").performClick();
+                check(((IconFilters.Position) Draft.load(activity).filters.get(1)).values[0] == 76,
+                        "Leaving Filters retains position changes without an Apply action");
             });
             waitForThumbnails(activity);
         } finally {
             runOnMainChecked(() -> {
-                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
-                if (dialog != null) dialog.dismiss();
                 setField(activity, "draft", original);
                 original.save(activity);
                 build.invoke(activity);
@@ -3954,7 +4025,6 @@ public final class DeviceTests extends Instrumentation {
     }
 
     private int progressCount(android.view.View view) {
-        if ("style-preview-loading".equals(view.getTag())) return 0;
         int count = view instanceof android.widget.ProgressBar progress && progress.isIndeterminate() ? 1 : 0;
         if (view instanceof android.view.ViewGroup group) {
             for (int i = 0; i < group.getChildCount(); i++) count += progressCount(group.getChildAt(i));

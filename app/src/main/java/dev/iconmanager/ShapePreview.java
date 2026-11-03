@@ -95,6 +95,14 @@ final class ShapePreview implements AutoCloseable {
                                   Map<String, String> overrides, int visibleSize, String wallpaperPath,
                                   String overlayReference, String backgroundReference, String shapeMaskReference,
                                   List<IconFilters.Filter> filters) throws IOException {
+        return loadStyle(context, apps, pack, overrides, visibleSize, wallpaperPath, overlayReference,
+                backgroundReference, shapeMaskReference, filters, false);
+    }
+
+    static ShapePreview loadStyle(Context context, List<IconRepository.App> apps, IconRepository.Pack pack,
+                                  Map<String, String> overrides, int visibleSize, String wallpaperPath,
+                                  String overlayReference, String backgroundReference, String shapeMaskReference,
+                                  List<IconFilters.Filter> filters, boolean systemOnly) throws IOException {
         ShapePreview preview = new ShapePreview(visibleSize);
         try {
             Collator collator = Collator.getInstance(context.getResources().getConfiguration().getLocales().get(0));
@@ -109,19 +117,23 @@ final class ShapePreview implements AutoCloseable {
                     preview.addSystem(context, app, filters);
                     systemExamples.add(app.key());
                 }
-                else if (name != null && preview.packIcons.size() < 3) {
+                else if (!systemOnly && name != null && preview.packIcons.size() < 3) {
                     preview.packIcons.add(pack.render(name, 192));
                     preview.packLabels.add(app.label());
                     packedExamples.add(name);
                 }
-                if (preview.originals.size() == 3 && preview.packIcons.size() == 3) break;
+                if (preview.originals.size() == 3 && (systemOnly || preview.packIcons.size() == 3)) break;
             }
             if (preview.originals.size() < 3) for (IconRepository.App app : sorted) {
                 if (!systemExamples.add(app.key())) continue;
                 preview.addSystem(context, app, filters);
                 if (preview.originals.size() == 3) break;
             }
-            if (pack != null && preview.packIcons.size() < 3) {
+            if (systemOnly) for (IconRepository.App app : sorted) {
+                if (preview.originals.size() == 6) break;
+                if (systemExamples.add(app.key())) preview.addSystem(context, app, filters);
+            }
+            if (!systemOnly && pack != null && preview.packIcons.size() < 3) {
                 for (IconRepository.Icon icon : pack.icons.values()) {
                     if (!packedExamples.add(icon.name())) continue;
                     preview.packIcons.add(pack.render(icon.name(), IconShape.SIZE));
@@ -209,33 +221,50 @@ final class ShapePreview implements AutoCloseable {
     Bitmap renderStyle(IconShape shape, int[] corners, int overlayScale, boolean overlayClip,
                        int backgroundScale, boolean backgroundClip, Bitmap fileMask, int maskScale,
                        boolean overlayAll, boolean backgroundAll, int iconScale) {
+        return renderStyle(shape, corners, overlayScale, overlayClip, backgroundScale, backgroundClip,
+                fileMask, maskScale, overlayAll, backgroundAll, iconScale, true, HEIGHT);
+    }
+
+    Bitmap renderStyle(IconShape shape, int[] corners, int overlayScale, boolean overlayClip,
+                       int backgroundScale, boolean backgroundClip, Bitmap fileMask, int maskScale,
+                       boolean overlayAll, boolean backgroundAll, int iconScale, boolean mixed, int height) {
         Bitmap source = fileMask == null ? shapeMask : fileMask;
         Bitmap scaledMask = shape == IconShape.FILE && source != null && maskScale != 100
                 ? IconMask.scaled(source, maskScale) : null;
         try {
             return renderScene(shape, corners, overlayScale, overlayClip, backgroundScale, backgroundClip,
-                    scaledMask == null ? source : scaledMask, true, overlayAll, backgroundAll, iconScale);
+                    scaledMask == null ? source : scaledMask, mixed, overlayAll, backgroundAll, iconScale, height);
         } finally { if (scaledMask != null) scaledMask.recycle(); }
     }
 
     private Bitmap renderScene(IconShape shape, int[] corners, int overlayScale, boolean overlayClip,
                                int backgroundScale, boolean backgroundClip, Bitmap activeMask, boolean mixed,
                                boolean overlayAll, boolean backgroundAll, int iconScale) {
-        Bitmap result = Bitmap.createBitmap(WIDTH, HEIGHT, Bitmap.Config.ARGB_8888);
+        return renderScene(shape, corners, overlayScale, overlayClip, backgroundScale, backgroundClip,
+                activeMask, mixed, overlayAll, backgroundAll, iconScale, HEIGHT);
+    }
+
+    private Bitmap renderScene(IconShape shape, int[] corners, int overlayScale, boolean overlayClip,
+                               int backgroundScale, boolean backgroundClip, Bitmap activeMask, boolean mixed,
+                               boolean overlayAll, boolean backgroundAll, int iconScale, int outputHeight) {
+        Bitmap result = Bitmap.createBitmap(WIDTH, outputHeight, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(result);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         if (wallpaper == null) {
-            paint.setShader(new LinearGradient(0, 0, WIDTH, HEIGHT,
+            paint.setShader(new LinearGradient(0, 0, WIDTH, outputHeight,
                     new int[]{0xFF344C79, 0xFF294C54, 0xFF182638}, null, Shader.TileMode.CLAMP));
-            canvas.drawRect(0, 0, WIDTH, HEIGHT, paint);
+            canvas.drawRect(0, 0, WIDTH, outputHeight, paint);
             paint.setShader(null);
         } else {
-            float scale = Math.max((float) WIDTH / wallpaper.getWidth(), (float) HEIGHT / wallpaper.getHeight());
-            int width = Math.round(WIDTH / scale), height = Math.round(HEIGHT / scale);
+            float scale = Math.max((float) WIDTH / wallpaper.getWidth(), (float) outputHeight / wallpaper.getHeight());
+            int width = Math.max(1, Math.round(WIDTH / scale)), height = Math.max(1, Math.round(outputHeight / scale));
             int left = (wallpaper.getWidth() - width) / 2, top = (wallpaper.getHeight() - height) / 2;
             canvas.drawBitmap(wallpaper, new Rect(left, top, left + width, top + height),
-                    new Rect(0, 0, WIDTH, HEIGHT), paint);
+                    new Rect(0, 0, WIDTH, outputHeight), paint);
         }
+        float sceneScale = Math.min(1f, (float) outputHeight / HEIGHT);
+        canvas.translate((WIDTH - WIDTH * sceneScale) / 2, (outputHeight - HEIGHT * sceneScale) / 2);
+        canvas.scale(sceneScale, sceneScale);
         TextPaint text = new TextPaint(Paint.ANTI_ALIAS_FLAG);
         text.setColor(Color.WHITE);
         text.setTextSize(25);
