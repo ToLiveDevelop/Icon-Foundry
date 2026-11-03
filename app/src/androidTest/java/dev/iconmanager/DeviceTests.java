@@ -67,6 +67,10 @@ public final class DeviceTests extends Instrumentation {
 
     private void runChecks() throws Exception {
         Context context = getTargetContext();
+        if ("true".equals(arguments.getString("inlineStyleOnly"))) {
+            verifyInlineStyleFixture(context);
+            return;
+        }
         if ("true".equals(arguments.getString("perPackResolutionUiOnly"))) {
             IconRepository repository = new IconRepository(context);
             IconRepository.Pack first = repository.load("com.maxpatchs.premium");
@@ -458,6 +462,7 @@ public final class DeviceTests extends Instrumentation {
         } finally { Files.deleteIfExists(invalid.toPath()); }
         check(context.getCacheDir().listFiles((dir, name) -> name.startsWith("sample-")).length == 0, "Reference temporary files cleaned up");
         verifySettingsUi(context);
+        verifyInlineStyleFixture(context);
     }
 
     private void verifySettingsUi(Context context) throws Exception {
@@ -595,16 +600,17 @@ public final class DeviceTests extends Instrumentation {
             check(preview.getDrawable() instanceof android.graphics.drawable.BitmapDrawable
                             && activity.getString(R.string.style_preview).contentEquals(preview.getContentDescription()),
                     "Style tab shows its universal six-icon preview");
-            check(Math.abs(preview.getWidth() * (float) ShapePreview.HEIGHT / ShapePreview.WIDTH
-                            - preview.getHeight()) <= 1,
-                    "Universal style preview preserves the scene aspect ratio");
+            check(preview.getScaleType() == android.widget.ImageView.ScaleType.FIT_CENTER
+                            && preview.getHeight() > 0,
+                    "Universal style preview fits the available space without stretching");
             @SuppressWarnings("unchecked")
             List<android.view.View> pages = (List<android.view.View>) field(activity, "editorPages");
             android.view.ViewGroup page = (android.view.ViewGroup) pages.get(1);
             android.view.View stage = page.findViewWithTag("style-stage");
             android.view.View tabs = page.findViewWithTag("style-tabs");
             android.widget.ScrollView scroll = page.findViewWithTag("style-scroll");
-            check(stage.getParent() == page && tabs.getParent() == page && scroll.getParent() == page
+            check(stage.getParent() == page && tabs.getParent() == scroll.getParent()
+                            && ((android.view.View) tabs.getParent()).getParent() == page
                             && preview.getParent() == stage,
                     "Style preview and inner tabs are pinned above the scrolling controls");
             int pinnedTop = stage.getTop();
@@ -633,6 +639,130 @@ public final class DeviceTests extends Instrumentation {
                 check(preview.isShown(), "Style preview remains visible on inner tab " + i);
             }
         });
+    }
+
+    private void verifyInlineStyleFixture(Context context) throws Exception {
+        IconRepository repository = new IconRepository(context);
+        IconRepository.Pack pack = repository.load("com.maxpatchs.premium");
+        List<IconRepository.App> installed = repository.apps();
+        String icon = pack.icons.keySet().iterator().next();
+        Map<String, String> allAssigned = new LinkedHashMap<>();
+        for (IconRepository.App app : installed) allAssigned.put(app.key(), icon);
+        try (ShapePreview scene = ShapePreview.loadStyle(context, installed, pack, allAssigned,
+                pack.fallbackSize(), "", "", "", "", List.of())) {
+            check(((List<?>) field(scene, "originals")).size() == 3, "Fully covered pack still shows three system examples");
+        }
+        Map<String, String> noneAssigned = new LinkedHashMap<>();
+        for (IconRepository.App app : installed) noneAssigned.put(app.key(), "");
+        try (ShapePreview scene = ShapePreview.loadStyle(context, installed, pack, noneAssigned,
+                pack.fallbackSize(), "", "", "", "", List.of())) {
+            check(((List<?>) field(scene, "packIcons")).size() == 3, "Catalogue fills missing installed pack examples");
+        }
+        MainActivity activity = (MainActivity) startActivitySync(new android.content.Intent(context, MainActivity.class)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK));
+        Draft original = null;
+        Bitmap before = null;
+        java.util.Set<String> beforeFiles = new java.util.HashSet<>();
+        File[] existing = FileIcons.directory(context).listFiles();
+        if (existing != null) for (File file : existing) beforeFiles.add(file.getName());
+        Bitmap layer = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+        android.graphics.Paint layerPaint = new android.graphics.Paint();
+        layerPaint.setColor(Color.argb(160, 30, 190, 240));
+        new android.graphics.Canvas(layer).drawRect(24, 24, 168, 96, layerPaint);
+        String layerRef;
+        try { layerRef = FileIcons.save(context, layer); } finally { layer.recycle(); }
+        try {
+            waitForWork(activity);
+            original = (Draft) field(activity, "draft");
+            Draft fixture = Draft.fromJson(original.toJson());
+            fixture.packs.clear(); fixture.packs.add(pack.packageName);
+            fixture.shape = IconShape.CIRCLE; fixture.shapeFile = ""; fixture.maskScale = 100;
+            fixture.background = layerRef; fixture.overlay = layerRef; fixture.filters.clear(); fixture.overrides.clear();
+            fixture.backgroundAll = true; fixture.overlayAll = true;
+            fixture.backgroundScale = 100; fixture.overlayScale = 100;
+            fixture.iconScale = 100;
+            var build = MainActivity.class.getDeclaredMethod("buildScreen");
+            build.setAccessible(true);
+            runOnMainChecked(() -> {
+                setField(activity, "draft", fixture);
+                setField(activity, "pack", pack);
+                setField(activity, "apps", installed);
+                setField(activity, "editing", true);
+                build.invoke(activity);
+            });
+            waitForThumbnails(activity);
+            verifyStyleUi(activity);
+            runOnMainChecked(() -> {
+                activity.getWindow().getDecorView().findViewWithTag("style-tab-2").performClick();
+                android.widget.ImageView preview = (android.widget.ImageView) field(activity, "stylePreview");
+                check(activity.getWindow().getDecorView().findViewWithTag("style-icon-scale").isShown(),
+                        "Icon scale belongs to inline settings");
+                check(activity.getWindow().getDecorView().findViewWithTag("style-corner-0").isShown(),
+                        "Corner editor belongs to inline settings");
+            });
+            before = ((android.graphics.drawable.BitmapDrawable) ((android.widget.ImageView) field(activity,
+                    "stylePreview")).getDrawable()).getBitmap().copy(Bitmap.Config.ARGB_8888, false);
+            runOnMainChecked(() -> activity.getWindow().getDecorView()
+                    .findViewWithTag("style-icon-scale-decrease").performClick());
+            waitForThumbnails(activity);
+            check(fixture.iconScale == 99 && Draft.load(context).iconScale == 99, "Inline icon scale is saved immediately");
+            Bitmap after = ((android.graphics.drawable.BitmapDrawable) ((android.widget.ImageView) field(activity,
+                    "stylePreview")).getDrawable()).getBitmap();
+            check(!before.sameAs(after), "Inline icon scale updates the pinned scene");
+            before.recycle();
+            before = after.copy(Bitmap.Config.ARGB_8888, false);
+            runOnMainChecked(() -> {
+                android.view.View decor = activity.getWindow().getDecorView();
+                decor.findViewWithTag("style-tab-0").performClick();
+                check(decor.findViewWithTag("style-background-scale").isShown(), "Background scale is inline");
+                decor.findViewWithTag("style-background-scale-decrease").performClick();
+            });
+            waitForThumbnails(activity);
+            check(fixture.backgroundScale == 99 && Draft.load(context).backgroundScale == 99,
+                    "Background scale saves without modal confirmation");
+            runOnMainChecked(() -> {
+                android.view.View decor = activity.getWindow().getDecorView();
+                decor.findViewWithTag("style-tab-1").performClick();
+                check(decor.findViewWithTag("style-overlay-scale").isShown(), "Overlay scale is inline");
+                decor.findViewWithTag("style-overlay-scale-increase").performClick();
+            });
+            waitForThumbnails(activity);
+            check(fixture.overlayScale == 101 && Draft.load(context).overlayScale == 101,
+                    "Overlay scale saves without modal confirmation");
+            after = ((android.graphics.drawable.BitmapDrawable) ((android.widget.ImageView) field(activity,
+                    "stylePreview")).getDrawable()).getBitmap();
+            check(!before.sameAs(after), "Layer edits update the same pinned preview");
+            runOnMainChecked(() -> activity.getWindow().getDecorView().findViewWithTag("style-tab-2").performClick());
+            runOnMainChecked(() -> activity.getWindow().getDecorView()
+                    .findViewWithTag("style-corner-0-decrease").performClick());
+            waitForThumbnails(activity);
+            check(fixture.shape == IconShape.CUSTOM, "Inline corner arrows select custom shape immediately");
+            runOnMainChecked(() -> activity.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
+            android.os.SystemClock.sleep(800);
+            waitForIdleSync();
+            runOnMainChecked(() -> {
+                android.view.View stage = activity.getWindow().getDecorView().findViewWithTag("style-stage");
+                android.view.View scroll = activity.getWindow().getDecorView().findViewWithTag("style-scroll");
+                check(stage.getWidth() <= ((android.view.View) stage.getParent()).getWidth() / 3 + 1
+                                && stage.getHeight() > 0
+                                && scroll.getHeight() >= 48 * context.getResources().getDisplayMetrics().density,
+                        "Landscape preview leaves usable space for scrolling controls: stage=" + stage.getHeight()
+                                + ", page=" + ((android.view.View) stage.getParent()).getHeight() + ", scroll=" + scroll.getHeight());
+                check(field(activity, "shapeDialog") == null && field(activity, "backgroundDialog") == null,
+                        "Inline settings do not open old modal editors");
+            });
+        } finally {
+            if (before != null) before.recycle();
+            Draft restored = original;
+            runOnMainChecked(() -> {
+                if (restored != null) { setField(activity, "draft", restored); restored.save(activity); }
+                activity.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+                activity.finish();
+            });
+            String layerName = layerRef.substring("fileicon:".length()) + ".png";
+            if (!beforeFiles.contains(layerName))
+                Files.deleteIfExists(new File(FileIcons.directory(context), layerName).toPath());
+        }
     }
 
     private void verifyShapeExamples(Context context, IconRepository.Pack pack) throws Exception {
@@ -1033,8 +1163,9 @@ public final class DeviceTests extends Instrumentation {
                 android.view.View decor = activity.getWindow().getDecorView();
                 check(decor.findViewWithTag("icon-scale") == null,
                         "Icon scale is no longer duplicated in theme options");
-                check(decor.findViewWithTag("background-settings").getVisibility() == android.view.View.GONE,
-                        "Background settings are hidden without a selected background");
+                check(decor.findViewWithTag("background-settings") == null
+                                && decor.findViewWithTag("style-background-scale") != null,
+                        "Background controls are inline rather than behind a settings button");
                 IconRepository.Pack pack = (IconRepository.Pack) field(activity, "pack");
                 int size = pack.iconSize();
                 android.widget.TextView info = (android.widget.TextView) field(activity, "iconSizeInfo");
@@ -1282,23 +1413,23 @@ public final class DeviceTests extends Instrumentation {
                         "Confirming the background saves icon scale");
                 check(((android.view.View) field(field(activity, "backgroundSection"), "content")).getVisibility()
                                 == android.view.View.VISIBLE, "Selecting a background expands its card");
-                android.view.View settings = activity.getWindow().getDecorView().findViewWithTag("background-settings");
-                check(settings.getVisibility() == android.view.View.VISIBLE, "Selected background exposes its settings button");
-                settings.performClick();
+                check(((android.widget.SeekBar) activity.getWindow().getDecorView()
+                                .findViewWithTag("style-background-scale")).getProgress() == 100,
+                        "Inline background controls reflect imported settings");
             });
             waitForWork(activity);
             waitForThumbnails(activity);
             runOnMainChecked(() -> {
-                android.app.Dialog dialog = (android.app.Dialog) field(activity, "backgroundDialog");
-                android.view.View decor = dialog.getWindow().getDecorView();
-                check(((android.widget.SeekBar) decor.findViewWithTag("icon-scale")).getProgress() == 60
-                                && ((android.widget.SeekBar) decor.findViewWithTag("background-scale")).getProgress() == 100,
-                        "Settings reopen the same background dialog with saved scales");
-                decor.findViewWithTag("icon-scale-increase").performClick();
-                decor.findViewWithTag("background-scale-decrease").performClick();
-                dialog.dismiss();
-                check(isolated.iconScale == 60 && isolated.backgroundScale == 100,
-                        "Dismissing background settings discards both scale changes");
+                android.view.View decor = activity.getWindow().getDecorView();
+                check(((android.widget.SeekBar) decor.findViewWithTag("style-icon-scale")).getProgress() == 60
+                                && ((android.widget.SeekBar) decor.findViewWithTag("style-background-scale")).getProgress() == 100,
+                        "Inline settings reflect saved scales");
+                decor.findViewWithTag("style-icon-scale-increase").performClick();
+                decor.findViewWithTag("style-background-scale-decrease").performClick();
+                check(isolated.iconScale == 61 && isolated.backgroundScale == 99,
+                        "Inline settings apply immediately");
+                decor.findViewWithTag("style-icon-scale-decrease").performClick();
+                decor.findViewWithTag("style-background-scale-increase").performClick();
                 ((android.view.View) field(activity, "shapeButton")).performClick();
             });
             waitForThumbnails(activity);
@@ -1395,8 +1526,9 @@ public final class DeviceTests extends Instrumentation {
                 check(isolated.background.isEmpty() && !isolated.backgroundAll && isolated.backgroundClip
                                 && isolated.backgroundScale == 100 && !isolated.toJson().has("background"),
                         "Removing a background clears its reference and resets related settings");
-                check(activity.getWindow().getDecorView().findViewWithTag("background-settings").getVisibility()
-                                == android.view.View.GONE, "Removing a background hides its settings button");
+                check(((android.widget.SeekBar) activity.getWindow().getDecorView()
+                                .findViewWithTag("style-background-scale")).getProgress() == 100,
+                        "Removing a background resets the inline scale");
                 ((android.view.View) field(activity, "shapeButton")).performClick();
             });
             waitForThumbnails(activity);

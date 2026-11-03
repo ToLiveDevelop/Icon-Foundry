@@ -101,15 +101,33 @@ final class ShapePreview implements AutoCloseable {
             List<IconRepository.App> sorted = apps.stream().sorted(Comparator
                     .comparing(IconRepository.App::label, collator).thenComparing(IconRepository.App::key)).toList();
             java.util.Set<String> selected = new java.util.HashSet<>();
+            java.util.Set<String> systemExamples = new java.util.HashSet<>(), packedExamples = new java.util.HashSet<>();
             for (IconRepository.App app : sorted) {
                 if (!selected.add(app.component().getPackageName())) continue;
                 String name = pack == null ? null : pack.selected(app, overrides);
-                if (name == null && preview.originals.size() < 3) preview.addSystem(context, app, filters);
+                if (name == null && preview.originals.size() < 3) {
+                    preview.addSystem(context, app, filters);
+                    systemExamples.add(app.key());
+                }
                 else if (name != null && preview.packIcons.size() < 3) {
                     preview.packIcons.add(pack.render(name, 192));
                     preview.packLabels.add(app.label());
+                    packedExamples.add(name);
                 }
                 if (preview.originals.size() == 3 && preview.packIcons.size() == 3) break;
+            }
+            if (preview.originals.size() < 3) for (IconRepository.App app : sorted) {
+                if (!systemExamples.add(app.key())) continue;
+                preview.addSystem(context, app, filters);
+                if (preview.originals.size() == 3) break;
+            }
+            if (pack != null && preview.packIcons.size() < 3) {
+                for (IconRepository.Icon icon : pack.icons.values()) {
+                    if (!packedExamples.add(icon.name())) continue;
+                    preview.packIcons.add(pack.render(icon.name(), IconShape.SIZE));
+                    preview.packLabels.add(icon.name());
+                    if (preview.packIcons.size() == 3) break;
+                }
             }
             if (preview.originals.isEmpty() && preview.packIcons.isEmpty())
                 throw new IOException(context.getString(R.string.shape_no_apps));

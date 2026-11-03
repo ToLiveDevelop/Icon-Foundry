@@ -115,6 +115,7 @@ public final class MainActivity extends Activity {
     private final List<LinearLayout> styleSections = new ArrayList<>();
     private int editorTab;
     private int styleTab = 2;
+    private Runnable pendingStylePreview;
 
     @Override protected void attachBaseContext(android.content.Context base) {
         super.attachBaseContext(App.themed(base));
@@ -675,9 +676,7 @@ public final class MainActivity extends Activity {
             }, this::previewBackground);
         });
         backgroundSettings.setTag("background-settings");
-        LinearLayout.LayoutParams backgroundSettingsParams = new LinearLayout.LayoutParams(-1, -2);
-        backgroundSettingsParams.topMargin = dp(8);
-        background.addView(backgroundSettings, backgroundSettingsParams);
+        addStyleLayerControls(background, false);
         backgroundScope = new RadioGroup(this);
         for (int label : new int[]{R.string.overlay_fallback, R.string.overlay_all}) {
             RadioButton option = new RadioButton(this);
@@ -703,6 +702,7 @@ public final class MainActivity extends Activity {
         removeOverlayParams.leftMargin = dp(6);
         overlayButtons.addView(removeOverlay, removeOverlayParams);
         overlay.addView(overlayButtons);
+        addStyleLayerControls(overlay, true);
         overlayScope = new RadioGroup(this);
         for (int label : new int[]{R.string.overlay_fallback, R.string.overlay_all}) {
             RadioButton option = new RadioButton(this);
@@ -720,7 +720,9 @@ public final class MainActivity extends Activity {
         packCard.addView(withHelp(text(getString(R.string.fallback_shape), 16, INK),
                 getString(R.string.fallback_shape), R.string.fallback_shape_help));
         shapeButton = button(R.string.choose_shape, view -> showShapePicker());
-        packCard.addView(shapeButton);
+        addInlineShapeControls(packCard);
+        packCard.addView(createScaleControl(draft.iconScale, "style-icon-scale", R.string.icon_scale,
+                R.string.icon_scale_help, value -> { draft.iconScale = value; styleChanged(); }));
         packCard.addView(withHelp(text(getString(R.string.filters_heading), 16, INK),
                 getString(R.string.filters_heading), R.string.filters_help));
         filtersButton = button(R.string.filters, view -> {
@@ -802,12 +804,158 @@ public final class MainActivity extends Activity {
         return body;
     }
 
+    private void styleChanged() {
+        saveDraft();
+        images.evictAll();
+        syncStyleControls();
+        refreshStylePreview();
+    }
+
+    private void syncStyleControls() {
+        int[] values = {draft.backgroundScale, draft.overlayScale, draft.iconScale, draft.maskScale};
+        String[] tags = {"style-background-scale", "style-overlay-scale", "style-icon-scale", "style-mask-scale"};
+        for (int i = 0; i < tags.length; i++) {
+            SeekBar slider = root.findViewWithTag(tags[i]);
+            if (slider != null) {
+                slider.setProgress(values[i]);
+                if (i == 3) enabled((View) slider.getParent(), draft.shape == IconShape.FILE);
+            }
+        }
+        for (IconShape shape : IconShape.values()) {
+            View option = root.findViewWithTag(shape);
+            if (option != null) {
+                boolean selected = draft.shape == shape;
+                option.setSelected(selected);
+                option.setBackground(buttonSurface(selected ? ACCENT : CONTROL, 20));
+                ((Button) option).setTextColor(selected ? Color.BLACK : ACCENT_TEXT);
+            }
+        }
+        CheckBox background = root.findViewWithTag("style-background-clip");
+        CheckBox overlay = root.findViewWithTag("style-overlay-clip");
+        if (background != null) background.setChecked(draft.backgroundClip);
+        if (overlay != null) overlay.setChecked(draft.overlayClip);
+    }
+
+    private void addStyleLayerControls(LinearLayout content, boolean overlay) {
+        content.addView(createScaleControl(overlay ? draft.overlayScale : draft.backgroundScale,
+                overlay ? "style-overlay-scale" : "style-background-scale",
+                overlay ? R.string.overlay_scale : R.string.background_scale,
+                overlay ? R.string.overlay_scale_help : R.string.background_scale_help,
+                value -> {
+                    if (overlay) draft.overlayScale = value; else draft.backgroundScale = value;
+                    styleChanged();
+                }));
+        CheckBox clip = new CheckBox(this);
+        clip.setTag(overlay ? "style-overlay-clip" : "style-background-clip");
+        clip.setText(overlay ? R.string.overlay_clip : R.string.background_clip);
+        clip.setChecked(overlay ? draft.overlayClip : draft.backgroundClip);
+        clip.setOnCheckedChangeListener((view, checked) -> {
+            if (overlay) draft.overlayClip = checked; else draft.backgroundClip = checked;
+            styleChanged();
+        });
+        content.addView(withHelp(clip, getString(overlay ? R.string.overlay_clip : R.string.background_clip),
+                overlay ? R.string.overlay_clip_help : R.string.background_clip_help));
+    }
+
+    private void addInlineShapeControls(LinearLayout content) {
+        LinearLayout presets = column();
+        presets.setTag("style-shape-presets");
+        LinearLayout row = null;
+        List<View> choices = new ArrayList<>();
+        for (IconShape shape : IconShape.values()) {
+            if (shape == IconShape.CUSTOM || shape == IconShape.FILE) continue;
+            if (row == null || row.getChildCount() == 2) { row = row(); presets.addView(row); }
+            Button option = button(shape.label, view -> {
+                draft.shape = shape; draft.shapeFile = ""; draft.maskScale = 100;
+                for (View choice : choices) choice.setSelected(choice.getTag() == shape);
+                styleChanged();
+            });
+            option.setTag(shape);
+            option.setSelected(draft.shape == shape);
+            choices.add(option);
+            row.addView(option, new LinearLayout.LayoutParams(0, -2, 1));
+        }
+        content.addView(presets);
+        for (int i = 0; i < 4; i++) {
+            int index = i;
+            int label = new int[]{R.string.corner_top_left, R.string.corner_top_right,
+                    R.string.corner_bottom_right, R.string.corner_bottom_left}[i];
+            TextView caption = text(getString(label, draft.corners[i]), 14, INK);
+            content.addView(caption);
+            SeekBar corner = new SeekBar(this);
+            corner.setTag("style-corner-" + i);
+            corner.setMax(IconShape.MAX_CORNER);
+            corner.setProgress(draft.corners[i]);
+            java.util.function.IntConsumer changed = value -> {
+                draft.corners[index] = value;
+                draft.shape = IconShape.CUSTOM; draft.shapeFile = ""; draft.maskScale = 100;
+                caption.setText(getString(label, value));
+                for (View choice : choices) choice.setSelected(false);
+                styleChanged();
+            };
+            corner.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override public void onProgressChanged(SeekBar bar, int value, boolean fromUser) {
+                    if (fromUser) changed.accept(value);
+                }
+                @Override public void onStartTrackingTouch(SeekBar bar) {}
+                @Override public void onStopTrackingTouch(SeekBar bar) {}
+            });
+            content.addView(steppedSlider(corner, changed));
+        }
+        content.addView(button(R.string.choose_shape_file, view -> {
+            pendingShapeMaskImport = selection -> {
+                draft.shape = IconShape.FILE;
+                draft.shapeFile = selection.reference();
+                selection.bitmap().recycle();
+                for (View choice : choices) choice.setSelected(false);
+                styleChanged();
+            };
+            openFile(MASK_FILE, "image/png");
+        }));
+        content.addView(createScaleControl(draft.maskScale, "style-mask-scale", R.string.mask_scale,
+                R.string.mask_scale_help, value -> {
+                    draft.maskScale = value; styleChanged();
+                }));
+    }
+
     private void styleEditorPage(FrameLayout parent) {
-        LinearLayout page = column();
+        LinearLayout page = new LinearLayout(this) {
+            @Override protected void onMeasure(int widthSpec, int heightSpec) {
+                boolean wide = getResources().getConfiguration().orientation
+                        == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
+                setOrientation(wide ? HORIZONTAL : VERTICAL);
+                if (getChildCount() == 2) {
+                    if (getChildAt(0).getLayoutParams().width != (wide ? 0 : -1)) {
+                        getChildAt(0).setLayoutParams(wide ? new LinearLayout.LayoutParams(0, -1, 1)
+                                : new LinearLayout.LayoutParams(-1, -2));
+                        getChildAt(1).setLayoutParams(wide ? new LinearLayout.LayoutParams(0, -1, 2)
+                                : new LinearLayout.LayoutParams(-1, 0, 1));
+                    }
+                    View tabs = findViewWithTag("style-tabs");
+                    ((LinearLayout.LayoutParams) tabs.getLayoutParams()).topMargin = wide ? 0 : dp(12);
+                    View scroll = findViewWithTag("style-scroll");
+                    ((LinearLayout.LayoutParams) scroll.getLayoutParams()).topMargin = wide ? 0 : dp(12);
+                    for (Button tab : styleTabs) {
+                        int height = dp(wide ? 48 : 56);
+                        if (tab.getMinHeight() != height) tab.setMinHeight(height);
+                    }
+                }
+                super.onMeasure(widthSpec, heightSpec);
+            }
+        };
+        page.setOrientation(LinearLayout.VERTICAL);
         FrameLayout stage = new FrameLayout(this) {
             @Override protected void onMeasure(int widthSpec, int heightSpec) {
+                if (page.getOrientation() == LinearLayout.HORIZONTAL) {
+                    super.onMeasure(widthSpec, heightSpec);
+                    return;
+                }
                 int height = Math.round(View.MeasureSpec.getSize(widthSpec)
                         * (float) ShapePreview.HEIGHT / ShapePreview.WIDTH);
+                if (View.MeasureSpec.getMode(heightSpec) != View.MeasureSpec.UNSPECIFIED) {
+                    int available = View.MeasureSpec.getSize(heightSpec);
+                    height = Math.min(height, available / 3);
+                }
                 super.onMeasure(widthSpec, View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY));
             }
         };
@@ -825,6 +973,9 @@ public final class MainActivity extends Activity {
         loading.setContentDescription(getString(R.string.loading));
         stage.addView(loading, new FrameLayout.LayoutParams(dp(40), dp(40), Gravity.CENTER));
         page.addView(stage, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout settings = column();
+        settings.setTag("style-controls");
+        page.addView(settings, new LinearLayout.LayoutParams(-1, 0, 1));
 
         LinearLayout tabs = row();
         tabs.setTag("style-tabs");
@@ -848,7 +999,7 @@ public final class MainActivity extends Activity {
         }
         LinearLayout.LayoutParams tabsParams = new LinearLayout.LayoutParams(-1, -2);
         tabsParams.topMargin = dp(12);
-        page.addView(tabs, tabsParams);
+        settings.addView(tabs, tabsParams);
 
         ScrollView scroll = new ScrollView(this);
         scroll.setTag("style-scroll");
@@ -865,7 +1016,7 @@ public final class MainActivity extends Activity {
         scroll.addView(content);
         LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(-1, 0, 1);
         scrollParams.topMargin = dp(12);
-        page.addView(scroll, scrollParams);
+        settings.addView(scroll, scrollParams);
         parent.addView(page, new FrameLayout.LayoutParams(-1, -1));
         editorPages.add(page);
         showStyleTab(styleTab);
@@ -931,6 +1082,7 @@ public final class MainActivity extends Activity {
 
     private void refresh() {
         refreshPacks();
+        syncStyleControls();
         int matched = 0, manual = 0;
         for (IconRepository.App app : apps) {
             if (pack != null && pack.selected(app, draft.overrides) != null) matched++;
@@ -1039,11 +1191,9 @@ public final class MainActivity extends Activity {
         ImageView target = stylePreview;
         View loading = ((ViewGroup) target.getParent()).findViewWithTag("style-preview-loading");
         target.setTag(key);
-        var previous = target.getDrawable();
-        target.setImageDrawable(null);
-        if (previous instanceof android.graphics.drawable.BitmapDrawable bitmap) bitmap.getBitmap().recycle();
         loading.setVisibility(View.VISIBLE);
-        thumbnails.execute(() -> {
+        if (pendingStylePreview != null) thumbnails.remove(pendingStylePreview);
+        Runnable task = () -> {
             int visibleSize = IconShape.SIZE - 2 * IconShape.INSET;
             try {
                 if (currentPack != null) visibleSize = currentPack.fallbackSize();
@@ -1053,8 +1203,10 @@ public final class MainActivity extends Activity {
                             effects.overlayClip(), effects.backgroundScale(), effects.backgroundClip(), null,
                             effects.maskScale(), overlayAll, backgroundAll, iconScale);
                     runOnUiThread(() -> {
-                        if (!isDestroyed() && key.equals(target.getTag())) {
+                        if (!isDestroyed() && target == stylePreview && key.equals(target.getTag())) {
+                            var previous = target.getDrawable();
                             target.setImageBitmap(image);
+                            if (previous instanceof android.graphics.drawable.BitmapDrawable bitmap) bitmap.getBitmap().recycle();
                             loading.setVisibility(View.GONE);
                         } else image.recycle();
                     });
@@ -1062,13 +1214,15 @@ public final class MainActivity extends Activity {
             } catch (IOException | RuntimeException error) {
                 Log.e("IconManager", "Style preview failed", error);
                 runOnUiThread(() -> {
-                    if (!isDestroyed() && key.equals(target.getTag())) {
+                    if (!isDestroyed() && target == stylePreview && key.equals(target.getTag())) {
                         loading.setVisibility(View.GONE);
                         showError(error);
                     }
                 });
             }
-        });
+        };
+        pendingStylePreview = task;
+        thumbnails.execute(task);
     }
 
     private void openFile(int code, String mime) {
@@ -1404,7 +1558,7 @@ public final class MainActivity extends Activity {
                     return new MaskSelection(reference, image.copy(Bitmap.Config.ARGB_8888, false));
                 } finally { image.recycle(); }
             }, selection -> {
-                if (shapeDialog != null && shapeDialog.isShowing()) selected.accept(selection);
+                if (editing || shapeDialog != null && shapeDialog.isShowing()) selected.accept(selection);
                 else selection.bitmap().recycle();
             });
             return;
@@ -1412,9 +1566,15 @@ public final class MainActivity extends Activity {
         if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
         if (requestCode == BACKGROUND_FILE) {
-            work(() -> IconBackground.read(this, uri), this::previewBackground);
+            work(() -> {
+                Bitmap image = IconBackground.read(this, uri);
+                try { return FileIcons.save(this, image); } finally { image.recycle(); }
+            }, reference -> { draft.background = reference; saveDraft(); refresh(); });
         } else if (requestCode == OVERLAY_FILE) {
-            work(() -> IconOverlay.read(this, uri), this::previewOverlay);
+            work(() -> {
+                Bitmap image = IconOverlay.read(this, uri);
+                try { return FileIcons.save(this, image); } finally { image.recycle(); }
+            }, reference -> { draft.overlay = reference; saveDraft(); refresh(); });
         } else if (requestCode == ICON_FILE) {
             if (pendingIconApp == null) { showError(new IOException(App.text(R.string.choose_app_again))); return; }
             String appKey = pendingIconApp;
