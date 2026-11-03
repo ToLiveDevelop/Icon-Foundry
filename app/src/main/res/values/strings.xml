@@ -129,8 +129,8 @@
     <string name="icon_scale_help" formatted="false">50–150% for pack icons and manually chosen icons. The artwork is resized around the centre of its canvas: below 100% leaves transparent margins, so the background and its frame stay visible; above 100% enlarges it and cuts off the edges. Overlay and background in All mode are applied after scaling. System icons without a replacement are scaled by HONOR according to the shape and are not affected. The app list, icon picker and auto cover show the result.</string>
     <string name="icon_scale_preview">Icon scale preview</string>
     <string name="icon_resolution">Icon resolution: %1$d × %2$d px</string>
-    <string name="export_resolution">Export resolution</string>
-    <string name="export_size_native">Original (per pack)</string>
+    <string name="export_resolution">Resolution</string>
+    <string name="export_size_native">original</string>
     <string name="export_size_invalid">Invalid pack export resolution.</string>
     <string name="export_file_size">Theme file size: %1$s</string>
     <string name="export_size_warning">Warning: this theme exceeds 290 MiB. On the tested HONOR phone, Themes stops listing files around 300 MB; the limit may differ by firmware. The file was saved. Lower the export resolution of secondary packs or export installed apps only, then create a new theme.</string>

@@ -2002,14 +2002,18 @@ public final class MainActivity extends Activity {
         resolution.setTag("export-size:" + member.packageName);
         resolution.setText(getString(R.string.export_resolution) + ": "
                 + (chosen == null ? getString(R.string.export_size_native) : chosen + " px"));
+        resolution.setSingleLine(true);
+        resolution.setAutoSizeTextTypeUniformWithConfiguration(8, 14, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
         resolution.setContentDescription(member.label + ", " + resolution.getText());
         details.addView(resolution);
         item.addView(details, new LinearLayout.LayoutParams(0, -2, 1));
-        Button remove = button(R.string.remove_pack, view -> removePack(packList.indexOfChild(item)));
-        remove.setMinWidth(dp(64)); remove.setMinimumWidth(dp(64));
-        remove.setPadding(dp(12), dp(6), dp(12), dp(6));
+        android.widget.ImageButton remove = iconButton(R.drawable.ic_delete, R.string.remove_pack,
+                view -> removePack(packList.indexOfChild(item)));
         remove.setContentDescription(getString(R.string.remove_pack_named, member.label));
-        item.addView(remove, new LinearLayout.LayoutParams(-2, -2));
+        remove.setTooltipText(getString(R.string.remove_pack_named, member.label));
+        LinearLayout.LayoutParams removeParams = new LinearLayout.LayoutParams(dp(48), dp(48));
+        removeParams.setMargins(dp(8), 0, dp(8), 0);
+        item.addView(remove, removeParams);
         item.setAccessibilityDelegate(new View.AccessibilityDelegate() {
             @Override public void onInitializeAccessibilityNodeInfo(View host, android.view.accessibility.AccessibilityNodeInfo info) {
                 super.onInitializeAccessibilityNodeInfo(host, info);

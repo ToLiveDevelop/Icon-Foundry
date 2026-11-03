@@ -67,6 +67,15 @@ public final class DeviceTests extends Instrumentation {
 
     private void runChecks() throws Exception {
         Context context = getTargetContext();
+        if ("true".equals(arguments.getString("perPackResolutionUiOnly"))) {
+            IconRepository repository = new IconRepository(context);
+            IconRepository.Pack first = repository.load("com.maxpatchs.premium");
+            String second = repository.packs().stream()
+                    .filter(info -> !info.packageName().equals(first.packageName))
+                    .findFirst().orElseThrow().packageName();
+            verifyPerPackResolutionUi(context, first, repository.load(second));
+            return;
+        }
         if ("true".equals(arguments.getString("perPackResolutionOnly"))) {
             verifyPerPackResolution(context);
             return;
@@ -3917,6 +3926,13 @@ public final class DeviceTests extends Instrumentation {
                 android.view.View decor = activity.getWindow().getDecorView();
                 android.widget.Button button = (android.widget.Button) decor.findViewWithTag("export-size:" + second.packageName);
                 check(button.getText().toString().contains("128 px"), "Pack row restores chosen resolution");
+                check(button.getMaxLines() == 1 && button.getLayout().getLineCount() == 1,
+                        "Resolution button stays on one line");
+                android.widget.LinearLayout rows = (android.widget.LinearLayout) field(activity, "packList");
+                android.view.View remove = ((android.view.ViewGroup) rows.getChildAt(1)).getChildAt(3);
+                check(remove instanceof android.widget.ImageButton && remove.getWidth() == remove.getHeight()
+                        && remove.getContentDescription().toString().contains(second.label),
+                        "Pack removal uses a square circular icon button with an accessible label");
                 button.performClick();
                 android.app.AlertDialog dialog = (android.app.AlertDialog) field(activity, "exportSizeDialog");
                 check(dialog.getListView().getAdapter().getCount() == 5, "Picker offers native and four fixed sizes");
@@ -4698,7 +4714,7 @@ public final class DeviceTests extends Instrumentation {
                 try {
                     check(Draft.load(activity).packs.equals(draft.packs), "Pack order is saved in the draft");
                 } catch (org.json.JSONException error) { throw new AssertionError(error); }
-                ((android.widget.Button) ((android.view.ViewGroup) moved.getChildAt(n)).getChildAt(3)).performClick();
+                ((android.widget.ImageButton) ((android.view.ViewGroup) moved.getChildAt(n)).getChildAt(3)).performClick();
                 IconRepository.Pack restored = (IconRepository.Pack) field(activity, "pack");
                 check(draft.packs.equals(original) && (n == 1 ? restored.members.isEmpty() : restored.packageNames().equals(original))
                                 && restored.packageName.equals(original.get(0)),
