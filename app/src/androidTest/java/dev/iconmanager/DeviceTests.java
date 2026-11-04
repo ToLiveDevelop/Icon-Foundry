@@ -67,6 +67,14 @@ public final class DeviceTests extends Instrumentation {
 
     private void runChecks() throws Exception {
         Context context = getTargetContext();
+        if ("true".equals(arguments.getString("templateBackupOnly"))) {
+            verifyTemplateBackup(context);
+            return;
+        }
+        if ("true".equals(arguments.getString("multiPackOnly"))) {
+            verifyMultiPack(new IconRepository(context).load(arguments.getString("pack", "com.maxpatchs.premium")));
+            return;
+        }
         if ("true".equals(arguments.getString("inlineStyleOnly"))) {
             verifyInlineStyleFixture(context);
             return;
@@ -704,9 +712,14 @@ public final class DeviceTests extends Instrumentation {
                                 (android.widget.LinearLayout.LayoutParams) bar.getLayoutParams();
                         check(params.bottomMargin >= Math.round(8 * result.getResources().getDisplayMetrics().density),
                                 "Main navigation keeps a bottom safety gap in light mode");
-                        for (android.widget.Button tab : navigation)
+                        for (android.widget.Button tab : navigation) {
                             check(tab.getBottom() <= bar.getHeight() - bar.getPaddingBottom(),
                                     "Main navigation tab fits above its bottom padding in light mode");
+                            check(tab.getStateListAnimator() == null && tab.getElevation() == 0
+                                            && tab.getTranslationZ() == 0 && tab.getMinWidth() == 0
+                                            && tab.getMaxLines() == 2 && tab.getLayoutParams().height == -2,
+                                    "Main navigation adapts to labels without clipped light-theme shadows");
+                        }
                     });
                 }
             }
@@ -1164,6 +1177,9 @@ public final class DeviceTests extends Instrumentation {
                         android.view.View tab = decor.findViewWithTag(tag);
                         check(tab.getStateListAnimator() == null && tab.getElevation() == 0 && tab.getTranslationZ() == 0,
                                 "Shape selector tabs have no resting or pressed elevation: " + tag);
+                        check(((android.widget.Button) tab).getMinWidth() == 0
+                                        && ((android.widget.Button) tab).getMaxLines() == 2,
+                                "Shape selector tabs fit narrow layouts without clipping their labels: " + tag);
                     }
                     check(fileTab != null, "Shape popup offers a PNG mask tab");
                     fileTab.performClick();
@@ -5022,6 +5038,9 @@ public final class DeviceTests extends Instrumentation {
         Map<String, String> installed = ThemeEngine.exportTargets(List.of(a, b, c, none), combined, Map.of(), false);
         check(installed.equals(Map.of("dev.app.a", "dev.pack.one:" + names.get(0), "dev.app.b", "dev.pack.five:" + names.get(4),
                 "dev.app.c", "dev.pack.two:" + names.get(2))), "Installed-only export resolves each app by pack priority");
+        ThemeEngine.ExportPlan plan = ThemeEngine.exportPlan(List.of(a, b, c, none), combined, Map.of(), false);
+        check(plan.targets().equals(installed) && plan.count() == 3,
+                "Combined export reuses pack selection results for targets and count");
         Map<String, String> manual = Map.of(a.key(), "dev.pack.five:" + names.get(3));
         check(("dev.pack.five:" + names.get(3)).equals(combined.selected(a, manual)), "Manual choice overrides pack priority");
         Bitmap expected = real.render(names.get(4), 64), actual = combined.render(combined.automatic(b), 64);
@@ -5036,8 +5055,10 @@ public final class DeviceTests extends Instrumentation {
             syntheticMapping(same, real, "dev.shared.app" + i + "/.Main", names.get(100 + i));
         }
         IconRepository.Pack union = IconRepository.combine(List.of(first, disjoint));
+        ThemeEngine.ExportPlan unionPlan = ThemeEngine.exportPlan(List.of(), union, Map.of(), true);
         check(ThemeEngine.exportCount(List.of(), union, Map.of(), true) == 200
-                        && ThemeEngine.exportTargets(List.of(), union, Map.of(), true).size() == 200,
+                        && ThemeEngine.exportTargets(List.of(), union, Map.of(), true).size() == 200
+                        && unionPlan.count() == 200 && unionPlan.targets().size() == 200,
                 "Whole-pack export of two disjoint 100-icon packs contains 200 icons");
         IconRepository.Pack overlap = IconRepository.combine(List.of(first, same));
         Map<String, String> overlapTargets = ThemeEngine.exportTargets(List.of(), overlap, Map.of(), true);

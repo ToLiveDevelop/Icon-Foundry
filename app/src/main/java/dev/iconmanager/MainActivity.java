@@ -154,6 +154,11 @@ public final class MainActivity extends Activity {
         });
     }
 
+    @Override protected void onResume() {
+        super.onResume();
+        if (repository != null) repository.invalidatePacks();
+    }
+
     private void showSettings() {
         Dialog dialog = fullDialog();
         settingsDialog = dialog;
@@ -1131,12 +1136,18 @@ public final class MainActivity extends Activity {
             tab.setTag("editor-tab-" + i);
             tab.setTextSize(12);
             tab.setGravity(Gravity.CENTER);
-            tab.setMinHeight(dp(64));
+            tab.setStateListAnimator(null);
+            tab.setElevation(0);
+            tab.setTranslationZ(0);
+            tab.setMinWidth(0);
+            tab.setMinimumWidth(0);
+            tab.setMaxLines(2);
+            tab.setMinHeight(dp(72));
             tab.setPadding(dp(4), dp(6), dp(4), dp(6));
             tab.setCompoundDrawablePadding(dp(3));
             tab.setCompoundDrawablesWithIntrinsicBounds(null, getDrawable(icons[i]), null, null);
             editorTabs.add(tab);
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(72), 1);
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -2, 1);
             if (i > 0) params.leftMargin = dp(4);
             bar.addView(tab, params);
         }
@@ -1463,6 +1474,9 @@ public final class MainActivity extends Activity {
             tab.setStateListAnimator(null);
             tab.setElevation(0);
             tab.setTranslationZ(0);
+            tab.setMinWidth(0);
+            tab.setMaxLines(2);
+            tab.setGravity(Gravity.CENTER);
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -2, 1);
             tabs.addView(tab, params);
         }
@@ -2451,6 +2465,7 @@ public final class MainActivity extends Activity {
         list.setDividerHeight(dp(1));
         layout.addView(list, new LinearLayout.LayoutParams(-1, 0, 1));
         List<IconRepository.App> filtered = new ArrayList<>();
+        Map<String, String> sourceLabels = new java.util.HashMap<>();
         BaseAdapter adapter = new BaseAdapter() {
             @Override public int getCount() { return filtered.size(); }
             @Override public Object getItem(int position) { return filtered.get(position); }
@@ -2473,7 +2488,8 @@ public final class MainActivity extends Activity {
                 ((TextView) labels.getChildAt(1)).setText(app.key());
                 String detail = selected != null && FileIcons.isFile(selected) ? getString(R.string.icon_from_file) : selected == null
                         ? getString(draft.overrides.containsKey(app.key()) ? R.string.original : R.string.missing)
-                        : getString(draft.overrides.containsKey(app.key()) ? R.string.manual : R.string.matched, selected);
+                        : getString(draft.overrides.containsKey(app.key()) ? R.string.manual : R.string.matched,
+                                iconSourceLabel(selected, pack, sourceLabels));
                 ((TextView) labels.getChildAt(2)).setText(detail);
                 ImageView image = (ImageView) item.getChildAt(0);
                 if (selected == null && draft.systemIcons) bindSystemImage(image, app);
@@ -2685,6 +2701,30 @@ public final class MainActivity extends Activity {
     }
 
     record IconChoice(IconRepository.Pack source, IconRepository.Icon icon) {}
+
+    private String iconSourceLabel(String reference, IconRepository.Pack currentPack, Map<String, String> cache) {
+        if (reference.startsWith(ThemeEngine.SYSTEM_ICON)) return getString(R.string.system_icons);
+        String owner = IconRepository.sourcePackage(reference, currentPack.packageName);
+        String cached = cache.get(owner);
+        if (cached != null) return cached;
+        List<IconRepository.Pack> members = currentPack.members.isEmpty() ? List.of(currentPack) : currentPack.members;
+        for (IconRepository.Pack member : members) {
+            if (member.packageName.equals(owner)) {
+                cache.put(owner, member.label);
+                return member.label;
+            }
+        }
+        try {
+            String label = getPackageManager().getApplicationLabel(
+                    getPackageManager().getApplicationInfo(owner, 0)).toString();
+            cache.put(owner, label);
+            return label;
+        } catch (android.content.pm.PackageManager.NameNotFoundException missing) {
+            String resource = IconRepository.resourceName(reference);
+            cache.put(owner, resource);
+            return resource;
+        }
+    }
 
     private GradientDrawable packTab(boolean selected) {
         GradientDrawable shape = rounded(selected ? CONTROL : Color.TRANSPARENT, 14);

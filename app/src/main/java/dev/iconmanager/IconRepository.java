@@ -338,6 +338,7 @@ final class IconRepository {
     private final PackageManager pm;
     private final LauncherApps launcherApps;
     private final java.io.File fileIcons;
+    private List<PackInfo> packCache;
 
     IconRepository(Context context) {
         pm = context.getPackageManager();
@@ -392,7 +393,12 @@ final class IconRepository {
         return apps;
     }
 
-    List<PackInfo> packs() throws PackageManager.NameNotFoundException {
+    synchronized void invalidatePacks() {
+        packCache = null;
+    }
+
+    synchronized List<PackInfo> packs() throws PackageManager.NameNotFoundException {
+        if (packCache != null) return packCache;
         Set<String> launchers = new LinkedHashSet<>();
         for (ResolveInfo info : pm.queryIntentActivities(
                 new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0)) {
@@ -437,7 +443,8 @@ final class IconRepository {
             }
         }
         result.sort(Comparator.comparing(PackInfo::label, String.CASE_INSENSITIVE_ORDER));
-        return result;
+        packCache = List.copyOf(result);
+        return packCache;
     }
 
     Pack load(String packageName) throws PackageManager.NameNotFoundException, IOException, XmlPullParserException {
