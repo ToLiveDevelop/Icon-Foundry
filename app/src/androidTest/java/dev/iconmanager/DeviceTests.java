@@ -561,6 +561,23 @@ public final class DeviceTests extends Instrumentation {
                     verifyFiltersUi(result);
                     verifyPositionUi(result);
                 }
+                if (mode.equals("light")) {
+                    runOnMainChecked(() -> { if (!(boolean) field(result, "editing")) result.openEditor(); });
+                    waitForWork(result);
+                    runOnMainChecked(() -> {
+                        @SuppressWarnings("unchecked")
+                        List<android.widget.Button> navigation =
+                                (List<android.widget.Button>) field(result, "editorTabs");
+                        android.view.View bar = (android.view.View) navigation.get(0).getParent();
+                        android.widget.LinearLayout.LayoutParams params =
+                                (android.widget.LinearLayout.LayoutParams) bar.getLayoutParams();
+                        check(params.bottomMargin >= Math.round(8 * result.getResources().getDisplayMetrics().density),
+                                "Main navigation keeps a bottom safety gap in light mode");
+                        for (android.widget.Button tab : navigation)
+                            check(tab.getBottom() <= bar.getHeight() - bar.getPaddingBottom(),
+                                    "Main navigation tab fits above its bottom padding in light mode");
+                    });
+                }
             }
         } finally {
             runOnMainChecked(() -> {
@@ -600,7 +617,7 @@ public final class DeviceTests extends Instrumentation {
             check(preview.getDrawable() instanceof android.graphics.drawable.BitmapDrawable
                             && activity.getString(R.string.style_preview).contentEquals(preview.getContentDescription()),
                     "Style tab shows its universal six-icon preview");
-            check(preview.getScaleType() == android.widget.ImageView.ScaleType.FIT_CENTER
+            check(preview.getScaleType() == android.widget.ImageView.ScaleType.CENTER_CROP
                             && preview.getHeight() > 0,
                     "Universal style preview fits the available space without stretching");
             @SuppressWarnings("unchecked")
@@ -629,6 +646,16 @@ public final class DeviceTests extends Instrumentation {
                     (List<android.widget.LinearLayout>) field(activity, "styleSections");
             check(innerTabs.size() == 4 && sections.size() == 4,
                     "Style has Background, Overlay, Icon options and Filters tabs");
+            @SuppressWarnings("unchecked")
+            List<android.widget.Button> navigation = (List<android.widget.Button>) field(activity, "editorTabs");
+            android.view.View navigationBar = navigation.get(0).getParent() instanceof android.view.View view ? view : null;
+            android.widget.LinearLayout.LayoutParams navigationParams =
+                    (android.widget.LinearLayout.LayoutParams) navigationBar.getLayoutParams();
+            check(navigationParams.bottomMargin >= Math.round(8 * activity.getResources().getDisplayMetrics().density),
+                    "Main navigation keeps a bottom safety gap");
+            for (android.widget.Button tab : navigation)
+                check(tab.getBottom() <= navigationBar.getHeight() - navigationBar.getPaddingBottom(),
+                        "Main navigation tab fits above its bottom padding");
             for (int i = 0; i < innerTabs.size(); i++) {
                 innerTabs.get(i).performClick();
                 for (int section = 0; section < sections.size(); section++) {
@@ -716,6 +743,9 @@ public final class DeviceTests extends Instrumentation {
                         "Shape presets retain the illustrated grid with separate editor and PNG tabs");
                 check(((android.view.ViewGroup) decor.findViewWithTag("style-shape-presets")).getChildCount() == 3,
                         "Ten illustrated shape choices occupy three grid rows");
+                android.widget.LinearLayout presets = decor.findViewWithTag("style-shape-presets");
+                check(presets.getTop() >= Math.round(8 * context.getResources().getDisplayMetrics().density),
+                        "Preset grid has a gap below its tabs");
                 decor.findViewWithTag("style-shape-tab-file").performClick();
                 check(decor.findViewWithTag("style-shape-file").isShown()
                                 && !decor.findViewWithTag("style-shape-presets").isShown()
@@ -786,9 +816,8 @@ public final class DeviceTests extends Instrumentation {
                 waitForThumbnails(activity);
                 android.widget.ImageView preview = (android.widget.ImageView) field(activity, "stylePreview");
                 Bitmap actual = ((android.graphics.drawable.BitmapDrawable) preview.getDrawable()).getBitmap();
-                check(Math.abs((float) actual.getWidth() / actual.getHeight()
-                                - (float) preview.getWidth() / preview.getHeight()) < .02,
-                        "Preview background fills the entire stage without letterboxing");
+                check(preview.getScaleType() == android.widget.ImageView.ScaleType.CENTER_CROP,
+                        "Preview background fills the stage without letterboxing");
                 try (ShapePreview scene = ShapePreview.loadStyle(context, installed, pack, fixture.overrides,
                         pack.fallbackSize(), fixture.wallpaperPath, fixture.overlay, fixture.background,
                         "", fixture.filters, filtersMode)) {
@@ -798,7 +827,7 @@ public final class DeviceTests extends Instrumentation {
                     Bitmap expected = scene.renderStyle(fixture.shape, fixture.corners, fixture.overlayScale,
                             fixture.overlayClip, fixture.backgroundScale, fixture.backgroundClip, null,
                             fixture.maskScale, fixture.overlayAll, fixture.backgroundAll, fixture.iconScale,
-                            !filtersMode, actual.getHeight());
+                            !filtersMode);
                     try { check(actual.sameAs(expected), filtersMode
                             ? "Filters tab renders both rows as system icons with live effects"
                             : "Leaving Filters restores pack icons in the second row"); }
@@ -3682,11 +3711,12 @@ public final class DeviceTests extends Instrumentation {
                         "Folder background toggle reflects persisted setting");
                 android.widget.Button shapePicker = (android.widget.Button) field(activity, "shapeButton");
                 android.widget.ImageView styleImage = (android.widget.ImageView) field(activity, "stylePreview");
-                check(styleImage.getScaleType() == android.widget.ImageView.ScaleType.FIT_CENTER
+                check(styleImage.getScaleType() == android.widget.ImageView.ScaleType.CENTER_CROP
                                 && styleImage.getTag() != null,
-                        "Universal style preview is attached to the editor");
-                check(shapePicker != null && shapePicker.getText().toString().contains(activity.getString(shown.shape.label)),
-                        "Shape picker button shows the currently saved shape");
+                        "Universal style preview fills the editor stage");
+                check(shapePicker != null && shapePicker.getParent() == null
+                                && root.findViewWithTag("style-shape-presets") != null,
+                        "Shape selection uses the inline illustrated tabs, not a separate button");
                 check(findShapePicker(activity.getWindow().getDecorView()) == null,
                         "Shape selection no longer uses a stock dropdown");
                 check(findText(activity.getWindow().getDecorView(), "Выбрать образец .hnt") == null,

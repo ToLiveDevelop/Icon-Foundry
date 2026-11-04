@@ -898,6 +898,9 @@ public final class MainActivity extends Activity {
             tabs.addView(buttons[i], new LinearLayout.LayoutParams(0, -2, 1));
             content.addView(pages[i]);
         }
+        LinearLayout.LayoutParams presetsParams = (LinearLayout.LayoutParams) presets.getLayoutParams();
+        presetsParams.topMargin = dp(8);
+        presets.setLayoutParams(presetsParams);
         LinearLayout row = null;
         int position = 0;
         for (IconShape shape : List.of(IconShape.ROUNDED_SQUARE, IconShape.SQUIRCLE, IconShape.SQUARE, IconShape.CIRCLE,
@@ -1040,13 +1043,9 @@ public final class MainActivity extends Activity {
         stage.setClipToOutline(true);
         stylePreview = new ImageView(this);
         stylePreview.setTag("style-preview");
-        stylePreview.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        stylePreview.setScaleType(ImageView.ScaleType.CENTER_CROP);
         stylePreview.setContentDescription(getString(R.string.style_preview));
         stage.addView(stylePreview, new FrameLayout.LayoutParams(-1, -1));
-        stage.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
-            if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop)
-                refreshStylePreview();
-        });
         page.addView(stage, new LinearLayout.LayoutParams(-1, -2));
         LinearLayout settings = column();
         settings.setTag("style-controls");
@@ -1137,6 +1136,7 @@ public final class MainActivity extends Activity {
         }
         LinearLayout.LayoutParams barParams = new LinearLayout.LayoutParams(-1, -2);
         barParams.topMargin = dp(8);
+        barParams.bottomMargin = dp(8);
         root.addView(bar, barParams);
     }
 
@@ -1257,9 +1257,6 @@ public final class MainActivity extends Activity {
             stylePreview.setTag(null);
             return;
         }
-        int previewHeight = stylePreview.getWidth() > 0 && stylePreview.getHeight() > 0
-                ? Math.max(1, Math.round((float) ShapePreview.WIDTH * stylePreview.getHeight() / stylePreview.getWidth()))
-                : ShapePreview.HEIGHT;
         boolean filtersOnly = styleTab == 3;
         Map<String, String> overrides = Map.copyOf(draft.overrides);
         boolean overlayAll = draft.overlayAll, backgroundAll = draft.backgroundAll;
@@ -1269,7 +1266,7 @@ public final class MainActivity extends Activity {
                 : new File(getFilesDir(), wallpaperPath).lastModified();
         String key = String.join(",", draft.packs) + ":" + effects.key() + ":" + overlayAll + ":" + backgroundAll
                 + ":" + iconScale + ":" + new java.util.TreeMap<>(overrides) + ":" + wallpaperPath + ":" + wallpaperChanged
-                + ":" + filtersOnly + ":" + previewHeight;
+                + ":" + filtersOnly;
         if (key.equals(stylePreview.getTag())) return;
         ImageView target = stylePreview;
         target.setTag(key);
@@ -1282,7 +1279,7 @@ public final class MainActivity extends Activity {
                         wallpaperPath, effects.overlay(), effects.background(), effects.shapeFile(), effects.filters(), filtersOnly)) {
                     Bitmap image = scene.renderStyle(effects.shape(), effects.corners(), effects.overlayScale(),
                             effects.overlayClip(), effects.backgroundScale(), effects.backgroundClip(), null,
-                            effects.maskScale(), overlayAll, backgroundAll, iconScale, !filtersOnly, previewHeight);
+                            effects.maskScale(), overlayAll, backgroundAll, iconScale, !filtersOnly);
                     runOnUiThread(() -> {
                         if (!isDestroyed() && target == stylePreview && key.equals(target.getTag())) {
                             var previous = target.getDrawable();

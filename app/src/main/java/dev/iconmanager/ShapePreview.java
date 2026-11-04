@@ -222,49 +222,39 @@ final class ShapePreview implements AutoCloseable {
                        int backgroundScale, boolean backgroundClip, Bitmap fileMask, int maskScale,
                        boolean overlayAll, boolean backgroundAll, int iconScale) {
         return renderStyle(shape, corners, overlayScale, overlayClip, backgroundScale, backgroundClip,
-                fileMask, maskScale, overlayAll, backgroundAll, iconScale, true, HEIGHT);
+                fileMask, maskScale, overlayAll, backgroundAll, iconScale, true);
     }
 
     Bitmap renderStyle(IconShape shape, int[] corners, int overlayScale, boolean overlayClip,
                        int backgroundScale, boolean backgroundClip, Bitmap fileMask, int maskScale,
-                       boolean overlayAll, boolean backgroundAll, int iconScale, boolean mixed, int height) {
+                       boolean overlayAll, boolean backgroundAll, int iconScale, boolean mixed) {
         Bitmap source = fileMask == null ? shapeMask : fileMask;
         Bitmap scaledMask = shape == IconShape.FILE && source != null && maskScale != 100
                 ? IconMask.scaled(source, maskScale) : null;
         try {
             return renderScene(shape, corners, overlayScale, overlayClip, backgroundScale, backgroundClip,
-                    scaledMask == null ? source : scaledMask, mixed, overlayAll, backgroundAll, iconScale, height);
+                    scaledMask == null ? source : scaledMask, mixed, overlayAll, backgroundAll, iconScale);
         } finally { if (scaledMask != null) scaledMask.recycle(); }
     }
 
     private Bitmap renderScene(IconShape shape, int[] corners, int overlayScale, boolean overlayClip,
                                int backgroundScale, boolean backgroundClip, Bitmap activeMask, boolean mixed,
                                boolean overlayAll, boolean backgroundAll, int iconScale) {
-        return renderScene(shape, corners, overlayScale, overlayClip, backgroundScale, backgroundClip,
-                activeMask, mixed, overlayAll, backgroundAll, iconScale, HEIGHT);
-    }
-
-    private Bitmap renderScene(IconShape shape, int[] corners, int overlayScale, boolean overlayClip,
-                               int backgroundScale, boolean backgroundClip, Bitmap activeMask, boolean mixed,
-                               boolean overlayAll, boolean backgroundAll, int iconScale, int outputHeight) {
-        Bitmap result = Bitmap.createBitmap(WIDTH, outputHeight, Bitmap.Config.ARGB_8888);
+        Bitmap result = Bitmap.createBitmap(WIDTH, HEIGHT, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(result);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         if (wallpaper == null) {
-            paint.setShader(new LinearGradient(0, 0, WIDTH, outputHeight,
+            paint.setShader(new LinearGradient(0, 0, WIDTH, HEIGHT,
                     new int[]{0xFF344C79, 0xFF294C54, 0xFF182638}, null, Shader.TileMode.CLAMP));
-            canvas.drawRect(0, 0, WIDTH, outputHeight, paint);
+            canvas.drawRect(0, 0, WIDTH, HEIGHT, paint);
             paint.setShader(null);
         } else {
-            float scale = Math.max((float) WIDTH / wallpaper.getWidth(), (float) outputHeight / wallpaper.getHeight());
-            int width = Math.max(1, Math.round(WIDTH / scale)), height = Math.max(1, Math.round(outputHeight / scale));
+            float scale = Math.max((float) WIDTH / wallpaper.getWidth(), (float) HEIGHT / wallpaper.getHeight());
+            int width = Math.round(WIDTH / scale), height = Math.round(HEIGHT / scale);
             int left = (wallpaper.getWidth() - width) / 2, top = (wallpaper.getHeight() - height) / 2;
             canvas.drawBitmap(wallpaper, new Rect(left, top, left + width, top + height),
-                    new Rect(0, 0, WIDTH, outputHeight), paint);
+                    new Rect(0, 0, WIDTH, HEIGHT), paint);
         }
-        float sceneScale = Math.min(1f, (float) outputHeight / HEIGHT);
-        canvas.translate((WIDTH - WIDTH * sceneScale) / 2, (outputHeight - HEIGHT * sceneScale) / 2);
-        canvas.scale(sceneScale, sceneScale);
         TextPaint text = new TextPaint(Paint.ANTI_ALIAS_FLAG);
         text.setColor(Color.WHITE);
         text.setTextSize(25);
