@@ -101,6 +101,7 @@ public final class DeviceTests extends Instrumentation {
             return;
         }
         verifyCoverAndReplacement(context);
+        verifyTemplateBackup(context);
         Bitmap previewSource = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
         previewSource.eraseColor(android.graphics.Color.RED);
         try {
@@ -465,6 +466,133 @@ public final class DeviceTests extends Instrumentation {
         verifyInlineStyleFixture(context);
     }
 
+    private void verifyTemplateBackup(Context context) throws Exception {
+        File testRoot = new File(context.getCacheDir(), "template-backup-check-" + Long.toUnsignedString(System.nanoTime()));
+        File sourceDirectory = new File(testRoot, "source");
+        File targetDirectory = new File(testRoot, "target");
+        Files.createDirectories(sourceDirectory.toPath());
+        Files.createDirectories(targetDirectory.toPath());
+        Context sourceContext = new android.content.ContextWrapper(context) {
+            @Override public File getFilesDir() { return sourceDirectory; }
+        };
+        Context targetContext = new android.content.ContextWrapper(context) {
+            @Override public File getFilesDir() { return targetDirectory; }
+        };
+        Bitmap image = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888);
+        image.eraseColor(Color.rgb(210, 80, 40));
+        try {
+            String reference = FileIcons.save(sourceContext, image);
+            File coverFile = new File(sourceDirectory, "backup-cover.jpg");
+            File wallpaperFile = new File(sourceDirectory, "backup-wallpaper.jpg");
+            try (FileOutputStream output = new FileOutputStream(coverFile)) {
+                check(image.compress(Bitmap.CompressFormat.JPEG, 95, output), "Backup test cover encoded");
+            }
+            try (FileOutputStream output = new FileOutputStream(wallpaperFile)) {
+                check(image.compress(Bitmap.CompressFormat.JPEG, 95, output), "Backup test wallpaper encoded");
+            }
+            byte[] expectedIcon = FileIcons.bytes(sourceContext, reference);
+            byte[] expectedCover = Files.readAllBytes(coverFile.toPath());
+            byte[] expectedWallpaper = Files.readAllBytes(wallpaperFile.toPath());
+
+            TemplateStore source = new TemplateStore(sourceContext);
+            Draft withAssets = new Draft();
+            withAssets.packs.add("dev.test.backup");
+            withAssets.title = "Template with media";
+            withAssets.tree = "content://device-specific/tree";
+            withAssets.coverPath = coverFile.getName();
+            withAssets.wallpaperPath = wallpaperFile.getName();
+            withAssets.overlay = reference;
+            withAssets.background = reference;
+            withAssets.shape = IconShape.FILE;
+            withAssets.shapeFile = reference;
+            withAssets.overrides.put("dev.test.app/dev.test.app.Main", reference);
+            TemplateStore.Entry first = source.save(withAssets, "Backup test pack", true);
+            Draft secondDraft = new Draft();
+            secondDraft.packs.add("dev.test.backup");
+            secondDraft.title = "Second template";
+            source.save(secondDraft, "Backup test pack", true);
+            byte[] firstBackup = source.backup();
+            org.json.JSONArray portableTemplates = new org.json.JSONObject(
+                    new String(firstBackup, StandardCharsets.UTF_8)).getJSONArray("templates");
+            org.json.JSONObject portableFirst = null;
+            for (int i = 0; i < portableTemplates.length(); i++) {
+                org.json.JSONObject candidate = portableTemplates.getJSONObject(i);
+                if (candidate.getString("id").equals(first.id())) portableFirst = candidate;
+            }
+            if (portableFirst == null) throw new AssertionError("Backup fixture template is missing");
+            org.json.JSONObject portableSettings = portableFirst.getJSONObject("settings");
+            check(portableSettings.getString("tree").isEmpty() && portableSettings.getString("coverPath").isEmpty()
+                            && portableSettings.getString("wallpaperPath").isEmpty(),
+                    "Backup excludes device-specific folders and local media paths");
+
+            TemplateStore target = new TemplateStore(targetContext);
+            TemplateStore.MergeResult initial = target.restoreBackup(firstBackup);
+            check(initial.imported() == 2 && initial.retained() == 0 && target.list().size() == 2,
+                    "Backup imports every template");
+            Draft restored = target.open(first.id());
+            check(restored.tree.isEmpty() && restored.shape == IconShape.FILE
+                            && restored.overlay.equals(reference) && restored.background.equals(reference)
+                            && restored.shapeFile.equals(reference),
+                    "Restore keeps media references and clears the device-specific export folder");
+            check(java.util.Arrays.equals(expectedIcon, FileIcons.bytes(targetContext, reference))
+                            && java.util.Arrays.equals(expectedCover,
+                            Files.readAllBytes(new File(targetDirectory, "template-cover.jpg").toPath()))
+                            && java.util.Arrays.equals(expectedWallpaper,
+                            Files.readAllBytes(new File(targetDirectory, "template-wallpaper.jpg").toPath())),
+                    "Backup restores custom icon, cover and wallpaper bytes");
+
+            restored.title = "Edited on this device";
+            target.save(restored, "Backup test pack", false);
+            Draft localOnly = new Draft();
+            localOnly.packs.add("dev.test.backup");
+            localOnly.title = "Local-only template";
+            TemplateStore.Entry local = target.save(localOnly, "Backup test pack", true);
+            Draft thirdDraft = new Draft();
+            thirdDraft.packs.add("dev.test.backup");
+            thirdDraft.title = "Added later";
+            source.save(thirdDraft, "Backup test pack", true);
+            TemplateStore.MergeResult merged = target.restoreBackup(source.backup());
+            check(merged.imported() == 1 && merged.retained() == 2 && target.list().size() == 4,
+                    "Restore adds only missing IDs and preserves local-only templates");
+            check(target.open(first.id()).title.equals("Edited on this device")
+                            && target.list().stream().anyMatch(entry -> entry.id().equals(local.id())),
+                    "A matching ID never overwrites the current template");
+
+            File storeFile = new File(targetDirectory, "templates.json");
+            byte[] beforeInvalidRestore = Files.readAllBytes(storeFile.toPath());
+            byte[] damaged = source.backup();
+            damaged[0] ^= 1;
+            expectFailure(() -> target.restoreBackup(damaged), "Damaged backup is rejected");
+
+            org.json.JSONObject invalidMedia = new org.json.JSONObject(new String(source.backup(), StandardCharsets.UTF_8));
+            org.json.JSONArray items = invalidMedia.getJSONArray("templates");
+            org.json.JSONObject mediaItem = null;
+            for (int i = 0; i < items.length(); i++) {
+                org.json.JSONObject candidate = items.getJSONObject(i);
+                if (candidate.getJSONObject("fileIcons").length() > 0) {
+                    mediaItem = candidate;
+                    break;
+                }
+            }
+            if (mediaItem == null) throw new AssertionError("Backup fixture has no file icons");
+            mediaItem.put("fileIcons", new org.json.JSONObject());
+            String mediaDigest = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(items.toString().getBytes(StandardCharsets.UTF_8)));
+            invalidMedia.put("sha256", mediaDigest);
+            expectFailure(() -> target.restoreBackup(invalidMedia.toString().getBytes(StandardCharsets.UTF_8)),
+                    "Backup with missing media is rejected even with a matching checksum");
+            check(java.util.Arrays.equals(beforeInvalidRestore, Files.readAllBytes(storeFile.toPath())),
+                    "Rejected backups leave the existing template store byte-for-byte unchanged");
+        } finally {
+            image.recycle();
+            if (testRoot.exists()) {
+                try (var paths = Files.walk(testRoot.toPath())) {
+                    for (var path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
+                }
+            }
+        }
+    }
+
     private void verifySettingsUi(Context context) throws Exception {
         android.app.Application application = (android.app.Application) context.getApplicationContext();
         java.util.concurrent.atomic.AtomicReference<MainActivity> resumed = new java.util.concurrent.atomic.AtomicReference<>();
@@ -508,6 +636,9 @@ public final class DeviceTests extends Instrumentation {
                     } catch (ReflectiveOperationException error) { throw new AssertionError(error); }
                     android.app.Dialog dialog = (android.app.Dialog) field(activity, "settingsDialog");
                     android.view.View decor = dialog.getWindow().getDecorView();
+                    check(findText(decor, activity.getString(R.string.backup_templates)) != null
+                                    && findText(decor, activity.getString(R.string.restore_templates)) != null,
+                            "Settings provide both template backup and restore actions");
                     int label = mode.equals("light") ? R.string.theme_light
                             : mode.equals("dark") ? R.string.theme_dark : R.string.theme_system;
                     android.widget.TextView themeChoice = findText(decor, activity.getString(label));

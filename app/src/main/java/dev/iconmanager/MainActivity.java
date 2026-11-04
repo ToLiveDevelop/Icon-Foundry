@@ -59,7 +59,7 @@ import java.util.function.Consumer;
 
 public final class MainActivity extends Activity {
     private static final int COVER = 11, DIRECTORY = 12, WALLPAPER = 13, ICON_FILE = 14, OVERLAY_FILE = 15,
-            BACKGROUND_FILE = 16, MASK_FILE = 17;
+            BACKGROUND_FILE = 16, MASK_FILE = 17, TEMPLATE_BACKUP_EXPORT = 18, TEMPLATE_BACKUP_IMPORT = 19;
     private int BG, PANEL, MUTED, CONTROL, INK, ACCENT_TEXT;
     private static final int ACCENT = Color.rgb(255, 193, 7);
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -240,6 +240,12 @@ public final class MainActivity extends Activity {
             languageChoices.add(option);
         }
         selectSetting(languageChoices, chosenLanguage[0]);
+        LinearLayout backup = card(content, R.string.template_backup);
+        TextView backupHelp = text(getString(R.string.template_backup_help), 14, MUTED);
+        backupHelp.setLineSpacing(0, 1.2f);
+        backup.addView(backupHelp);
+        backup.addView(button(R.string.backup_templates, view -> createTemplateBackup()));
+        backup.addView(button(R.string.restore_templates, view -> openFile(TEMPLATE_BACKUP_IMPORT, "application/json")));
         Button apply = button(R.string.apply_settings, view -> {
             if (!getSharedPreferences("settings", 0).edit().putString("theme", chosenTheme[0])
                     .putString("language", chosenLanguage[0]).commit()) {
@@ -1307,6 +1313,35 @@ public final class MainActivity extends Activity {
         startActivityForResult(intent, code);
     }
 
+    private void createTemplateBackup() {
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("application/json")
+                .addCategory(Intent.CATEGORY_OPENABLE).addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                .putExtra(Intent.EXTRA_TITLE, "icon-foundry-templates.json");
+        startActivityForResult(intent, TEMPLATE_BACKUP_EXPORT);
+    }
+
+    private byte[] readTemplateBackup(Uri uri) throws IOException {
+        try (java.io.InputStream input = getContentResolver().openInputStream(uri)) {
+            if (input == null) throw new IOException(getString(R.string.template_backup_read_error));
+            java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            int total = 0;
+            for (int count; (count = input.read(buffer)) != -1;) {
+                total += count;
+                if (total > TemplateStore.MAX_BACKUP_BYTES) {
+                    throw new IOException(getString(R.string.template_backup_too_large));
+                }
+                output.write(buffer, 0, count);
+            }
+            return output.toByteArray();
+        }
+    }
+
+    private void showTemplateBackupResult(String message) {
+        new AlertDialog.Builder(this).setTitle(R.string.template_backup)
+                .setMessage(message).setPositiveButton(R.string.close, null).show();
+    }
+
     private void showShapePicker() {
         Dialog dialog = fullDialog();
         shapeDialog = dialog;
@@ -1614,6 +1649,28 @@ public final class MainActivity extends Activity {
                 if (editing || shapeDialog != null && shapeDialog.isShowing()) selected.accept(selection);
                 else selection.bitmap().recycle();
             });
+            return;
+        }
+        if (requestCode == TEMPLATE_BACKUP_EXPORT || requestCode == TEMPLATE_BACKUP_IMPORT) {
+            if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+            Uri backupUri = data.getData();
+            if (requestCode == TEMPLATE_BACKUP_EXPORT) {
+                work(getString(R.string.template_backup_creating), () -> {
+                    byte[] bytes = templates.backup();
+                    try (java.io.OutputStream output = getContentResolver().openOutputStream(backupUri)) {
+                        if (output == null) throw new IOException(getString(R.string.template_backup_write_error));
+                        output.write(bytes);
+                    }
+                    return bytes.length;
+                }, size -> showTemplateBackupResult(getString(R.string.template_backup_created, size)));
+            } else {
+                work(getString(R.string.template_backup_restoring), () -> templates.restoreBackup(readTemplateBackup(backupUri)),
+                        result -> {
+                            if (!editing) showTemplates();
+                            showTemplateBackupResult(getString(R.string.template_backup_restored,
+                                    result.imported(), result.retained()));
+                        });
+            }
             return;
         }
         if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
