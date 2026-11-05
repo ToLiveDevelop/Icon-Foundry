@@ -15,6 +15,7 @@ import android.util.Xml;
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlSerializer;
 import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -26,12 +27,15 @@ import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.HashSet;
+import java.util.zip.CRC32;
+import java.util.zip.DeflaterOutputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipInputStream;
@@ -1233,10 +1237,90 @@ final class ThemeEngine {
         if (object == null) throw new IOException(App.text(R.string.storage_stream_error));
         return object;
     }
-    private static byte[] png(Bitmap bitmap) throws IOException {
-        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, bytes)) throw new IOException(App.text(R.string.png_encoding_error));
-        return bytes.toByteArray();
+    static byte[] png(Bitmap bitmap) throws IOException {
+        ByteArrayOutputStream original = new ByteArrayOutputStream();
+        if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, original)) {
+            throw new IOException(App.text(R.string.png_encoding_error));
+        }
+        byte[] indexed = indexedPng(bitmap);
+        return indexed != null && indexed.length < original.size() ? indexed : original.toByteArray();
+    }
+
+    private static byte[] indexedPng(Bitmap bitmap) throws IOException {
+        int width = bitmap.getWidth(), height = bitmap.getHeight();
+        int[] rowPixels = new int[width];
+        byte[] samples = new byte[Math.multiplyExact(width, height)];
+        Map<Integer, Integer> indices = new HashMap<>(256);
+        int[] palette = new int[256];
+        int colors = 0;
+        for (int y = 0; y < height; y++) {
+            bitmap.getPixels(rowPixels, 0, width, 0, y, width, 1);
+            int offset = y * width;
+            for (int x = 0; x < width; x++) {
+                int color = rowPixels[x];
+                Integer index = indices.get(color);
+                if (index == null) {
+                    if (colors == palette.length) return null;
+                    index = colors;
+                    indices.put(color, index);
+                    palette[colors++] = color;
+                }
+                samples[offset + x] = (byte) (int) index;
+            }
+        }
+
+        ByteArrayOutputStream compressed = new ByteArrayOutputStream();
+        try (DeflaterOutputStream deflater = new DeflaterOutputStream(compressed)) {
+            byte[] row = new byte[Math.addExact(width, 1)];
+            for (int y = 0; y < height; y++) {
+                row[0] = 0;
+                System.arraycopy(samples, y * width, row, 1, width);
+                deflater.write(row);
+            }
+        }
+
+        ByteArrayOutputStream png = new ByteArrayOutputStream();
+        DataOutputStream output = new DataOutputStream(png);
+        output.write(new byte[]{(byte) 137, 80, 78, 71, 13, 10, 26, 10});
+        ByteArrayOutputStream header = new ByteArrayOutputStream(13);
+        DataOutputStream headerData = new DataOutputStream(header);
+        headerData.writeInt(width);
+        headerData.writeInt(height);
+        headerData.writeByte(8);
+        headerData.writeByte(3);
+        headerData.writeByte(0);
+        headerData.writeByte(0);
+        headerData.writeByte(0);
+        writePngChunk(output, "IHDR", header.toByteArray());
+
+        byte[] rgb = new byte[colors * 3];
+        byte[] alpha = new byte[colors];
+        int alphaLength = 0;
+        for (int i = 0; i < colors; i++) {
+            int color = palette[i];
+            rgb[i * 3] = (byte) (color >>> 16);
+            rgb[i * 3 + 1] = (byte) (color >>> 8);
+            rgb[i * 3 + 2] = (byte) color;
+            alpha[i] = (byte) (color >>> 24);
+            if (alpha[i] != (byte) 255) alphaLength = i + 1;
+        }
+        writePngChunk(output, "PLTE", rgb);
+        if (alphaLength != 0) writePngChunk(output, "tRNS", java.util.Arrays.copyOf(alpha, alphaLength));
+        writePngChunk(output, "IDAT", compressed.toByteArray());
+        writePngChunk(output, "IEND", new byte[0]);
+        output.flush();
+        return png.toByteArray();
+    }
+
+    private static void writePngChunk(DataOutputStream output, String name, byte[] data) throws IOException {
+        byte[] type = name.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        output.writeInt(data.length);
+        output.write(type);
+        output.write(data);
+        CRC32 crc = new CRC32();
+        crc.update(type);
+        crc.update(data);
+        output.writeInt((int) crc.getValue());
     }
     private static void put(ZipOutputStream zip, String name, byte[] bytes) throws IOException {
         zip.putNextEntry(new ZipEntry(name)); zip.write(bytes); zip.closeEntry();

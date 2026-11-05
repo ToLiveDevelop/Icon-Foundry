@@ -67,6 +67,12 @@ public final class DeviceTests extends Instrumentation {
 
     private void runChecks() throws Exception {
         Context context = getTargetContext();
+        if ("true".equals(arguments.getString("pngOnly"))) {
+            verifyPngEncoding(context);
+            String pngPack = arguments.getString("pngPack");
+            if (pngPack != null && !pngPack.isBlank()) verifyPackPngEncoding(context, pngPack);
+            return;
+        }
         if ("true".equals(arguments.getString("perPackResolutionUiOnly"))) {
             IconRepository repository = new IconRepository(context);
             IconRepository.Pack first = repository.load("com.maxpatchs.premium");
@@ -4622,6 +4628,231 @@ public final class DeviceTests extends Instrumentation {
         IconRepository.Pack result = new IconRepository.Pack(packageName, label, real.resources, real.badge, real.manager);
         result.fileIcons = real.fileIcons;
         return result;
+    }
+
+    private void verifyPngEncoding(Context context) throws Exception {
+        Bitmap fewColors = Bitmap.createBitmap(128, 128, Bitmap.Config.ARGB_8888);
+        int[] pixels = new int[128 * 128];
+        int[] colors = {Color.TRANSPARENT, Color.argb(64, 255, 0, 255),
+                Color.argb(160, 255, 0, 255), Color.WHITE};
+        for (int i = 0; i < pixels.length; i++) pixels[i] = colors[(i / 128 + i % 128) % colors.length];
+        fewColors.setPixels(pixels, 0, 128, 0, 0, 128, 128);
+        try {
+            java.io.ByteArrayOutputStream original = new java.io.ByteArrayOutputStream();
+            check(fewColors.compress(Bitmap.CompressFormat.PNG, 100, original), "Reference PNG encoding succeeds");
+            byte[] encoded = ThemeEngine.png(fewColors);
+            check(pngColorType(encoded) == 3 && encoded.length < original.size(),
+                    "Small RGBA palette exports as a smaller indexed PNG");
+            Bitmap decoded = BitmapFactory.decodeByteArray(encoded, 0, encoded.length);
+            try {
+                check(decoded != null && decoded.sameAs(fewColors), "Indexed PNG preserves exact pixels and transparency");
+                check(Color.alpha(decoded.getPixel(1, 0)) == 64 && Color.alpha(decoded.getPixel(2, 0)) == 160
+                                && Color.alpha(decoded.getPixel(3, 0)) == 255,
+                        "Indexed PNG preserves per-color alpha");
+            } finally { if (decoded != null) decoded.recycle(); }
+        } finally { fewColors.recycle(); }
+
+        Bitmap allAlpha = Bitmap.createBitmap(256, 128, Bitmap.Config.ARGB_8888);
+        pixels = new int[256 * 128];
+        int alphaState = 0x2468ace;
+        for (int i = 0; i < pixels.length; i++) {
+            alphaState = alphaState * 1664525 + 1013904223;
+            int alpha = i < 256 ? i : alphaState >>> 24;
+            pixels[i] = Color.argb(alpha, alpha * 73 & 255, alpha * 37 & 255, alpha * 101 & 255);
+        }
+        allAlpha.setPixels(pixels, 0, 256, 0, 0, 256, 128);
+        try {
+            java.io.ByteArrayOutputStream original = new java.io.ByteArrayOutputStream();
+            check(allAlpha.compress(Bitmap.CompressFormat.PNG, 100, original), "All-alpha reference PNG encoding succeeds");
+            byte[] encoded = ThemeEngine.png(allAlpha);
+            check(pngColorType(encoded) == 3, "All 256 alpha values remain eligible for indexed PNG");
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inPremultiplied = false;
+            Bitmap baseline = BitmapFactory.decodeByteArray(original.toByteArray(), 0, original.size(), options);
+            Bitmap actual = BitmapFactory.decodeByteArray(encoded, 0, encoded.length, options);
+            try {
+                String mismatch = baseline == null || actual == null ? "decode failed" : firstPixelMismatch(baseline, actual);
+                check(mismatch == null, "Indexed PNG preserves the original encoder's exact unpremultiplied RGBA"
+                        + (mismatch == null ? "" : ": " + mismatch));
+            } finally {
+                if (baseline != null) baseline.recycle();
+                if (actual != null) actual.recycle();
+            }
+        } finally { allAlpha.recycle(); }
+
+        Bitmap limit = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888);
+        pixels = new int[256 * 256];
+        int state = 0x13579bdf;
+        for (int i = 0; i < pixels.length; i++) {
+            state = state * 1664525 + 1013904223;
+            int color = i < 256 ? i : state >>> 24;
+            pixels[i] = Color.rgb(color, color * 37 & 255, color * 101 & 255);
+        }
+        limit.setPixels(pixels, 0, 256, 0, 0, 256, 256);
+        try {
+            byte[] encoded = ThemeEngine.png(limit);
+            check(pngColorType(encoded) == 3, "Exactly 256 colors remain eligible for indexed PNG");
+            Bitmap decoded = BitmapFactory.decodeByteArray(encoded, 0, encoded.length);
+            try {
+                String mismatch = decoded == null ? "decode failed" : firstPixelMismatch(limit, decoded);
+                check(mismatch == null, "256-color PNG decodes pixel-for-pixel" + (mismatch == null ? "" : ": " + mismatch));
+            }
+            finally { if (decoded != null) decoded.recycle(); }
+        } finally { limit.recycle(); }
+
+        Bitmap overLimit = Bitmap.createBitmap(257, 32, Bitmap.Config.ARGB_8888);
+        pixels = new int[257 * 32];
+        for (int i = 0; i < pixels.length; i++) {
+            int color = i % 257;
+            pixels[i] = color == 256 ? Color.rgb(1, 2, 3)
+                    : Color.rgb(color, color * 37 & 255, color * 101 & 255);
+        }
+        overLimit.setPixels(pixels, 0, 257, 0, 0, 257, 32);
+        try {
+            byte[] encoded = ThemeEngine.png(overLimit);
+            check(pngColorType(encoded) == 6, "More than 256 colors use the lossless RGBA fallback");
+            Bitmap decoded = BitmapFactory.decodeByteArray(encoded, 0, encoded.length);
+            try { check(decoded != null && decoded.sameAs(overLimit), "RGBA fallback decodes pixel-for-pixel"); }
+            finally { if (decoded != null) decoded.recycle(); }
+        } finally { overLimit.recycle(); }
+
+        Bitmap stripes = Bitmap.createBitmap(256, 8, Bitmap.Config.ARGB_8888);
+        pixels = new int[256 * 8];
+        for (int i = 0; i < pixels.length; i++) {
+            int color = i & 255;
+            pixels[i] = Color.rgb(color, color * 37 & 255, color * 101 & 255);
+        }
+        stripes.setPixels(pixels, 0, 256, 0, 0, 256, 8);
+        try {
+            java.io.ByteArrayOutputStream original = new java.io.ByteArrayOutputStream();
+            check(stripes.compress(Bitmap.CompressFormat.PNG, 100, original), "Striped reference PNG encoding succeeds");
+            check(java.util.Arrays.equals(ThemeEngine.png(stripes), original.toByteArray()),
+                    "Unprofitable palette preserves the original PNG bytes");
+        } finally { stripes.recycle(); }
+
+        IconRepository.Pack pack = new IconRepository.Pack(context.getPackageName(), "PNG test",
+                context.getResources(), null, context.getPackageManager());
+        pack.icons.put("png_test", new IconRepository.Icon("png_test", "test", R.drawable.app_icon));
+        IconRepository.App app = new IconRepository.App(
+                new ComponentName("dev.iconmanager.pngtest", "dev.iconmanager.pngtest.Main"), "PNG test");
+        Map<String, String> overrides = Map.of(app.key(), "png_test");
+        Bitmap cover = ThemeEngine.cover(pack, List.of(app), overrides);
+        ThemeEngine.Built built;
+        try {
+            built = ThemeEngine.build(context, "PNG encoding check", false, IconShape.NONE, false,
+                    pack, List.of(app), overrides, cover, (done, total) -> {});
+        } finally { cover.recycle(); }
+        try {
+            ThemeEngine.verifyArchive(built.file(), 1, IconShape.NONE, false);
+            try (ZipFile archive = new ZipFile(built.file());
+                 ZipInputStream icons = new ZipInputStream(archive.getInputStream(archive.getEntry("icons")))) {
+                ZipEntry entry = icons.getNextEntry();
+                check(entry != null && entry.getName().equals("dev.iconmanager.pngtest.png"),
+                        "Optimized PNG is included at the expected archive path");
+                byte[] encoded = icons.readAllBytes();
+                Bitmap actual = BitmapFactory.decodeByteArray(encoded, 0, encoded.length);
+                Bitmap expected = pack.render("png_test", pack.iconSize());
+                try {
+                    String mismatch = actual == null ? "decode failed" : firstPixelMismatch(expected, actual);
+                    check(mismatch == null, "Validated HNT archive preserves the rendered icon pixels"
+                            + (mismatch == null ? "" : ": " + mismatch));
+                } finally {
+                    if (actual != null) actual.recycle();
+                    expected.recycle();
+                }
+            }
+        } finally { Files.deleteIfExists(built.file().toPath()); }
+    }
+
+    private int pngColorType(byte[] png) {
+        check(png.length >= 26 && png[0] == (byte) 137 && png[1] == 80 && png[2] == 78
+                        && png[3] == 71 && png[4] == 13 && png[5] == 10 && png[6] == 26 && png[7] == 10
+                        && png[12] == 73 && png[13] == 72 && png[14] == 68 && png[15] == 82,
+                "PNG signature and IHDR are present");
+        return png[25] & 255;
+    }
+
+    private void verifyPackPngEncoding(Context context, String packageName) throws Exception {
+        IconRepository.Pack pack = new IconRepository(context).load(packageName);
+        List<String> names = pack.mappings.values().stream().distinct().sorted().limit(3).toList();
+        check(!names.isEmpty(), "PNG measurement pack has direct appfilter mappings");
+        List<IconRepository.App> apps = new ArrayList<>();
+        Map<String, String> overrides = new LinkedHashMap<>();
+        Map<String, byte[]> expectedPngs = new LinkedHashMap<>();
+        int size = pack.iconSize();
+        for (int i = 0; i < names.size(); i++) {
+            String name = names.get(i);
+            IconRepository.App app = new IconRepository.App(new ComponentName("dev.iconmanager.pngtest" + i,
+                    "dev.iconmanager.pngtest" + i + ".Main"), name);
+            apps.add(app);
+            overrides.put(app.key(), name);
+            byte[] source;
+            try (var input = pack.resources.openRawResource(pack.icons.get(name).id())) {
+                source = input.readAllBytes();
+            }
+            Bitmap rendered = pack.render(name, size);
+            byte[] encoded;
+            java.io.ByteArrayOutputStream original = new java.io.ByteArrayOutputStream();
+            try {
+                check(rendered.compress(Bitmap.CompressFormat.PNG, 100, original), "Pack reference PNG encoding succeeds");
+                encoded = ThemeEngine.png(rendered);
+            } finally { rendered.recycle(); }
+            check(encoded.length <= original.size(), "Pack PNG never exceeds the original encoded size");
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inPremultiplied = false;
+            Bitmap baseline = BitmapFactory.decodeByteArray(original.toByteArray(), 0, original.size(), options);
+            Bitmap actual = BitmapFactory.decodeByteArray(encoded, 0, encoded.length, options);
+            try {
+                String mismatch = baseline == null || actual == null ? "decode failed" : firstPixelMismatch(baseline, actual);
+                check(mismatch == null, "Pack PNG preserves exact unpremultiplied RGBA: " + name
+                        + (mismatch == null ? "" : ": " + mismatch));
+                check(actual.getWidth() == size && actual.getHeight() == size, "Pack PNG keeps export dimensions");
+            } finally {
+                if (baseline != null) baseline.recycle();
+                if (actual != null) actual.recycle();
+            }
+            expectedPngs.put(app.component().getPackageName() + ".png", encoded);
+            Bundle status = new Bundle();
+            status.putString("stream", "PNG " + packageName + "/" + name + " " + size + "x" + size
+                    + ": source=" + source.length + " B, original=" + original.size() + " B, optimized="
+                    + encoded.length + " B, colorType=" + pngColorType(encoded) + "\n");
+            sendStatus(0, status);
+        }
+        Bitmap cover = ThemeEngine.cover(pack, apps, overrides);
+        ThemeEngine.Built built;
+        try {
+            built = ThemeEngine.build(context, "Pack PNG encoding check", false, IconShape.NONE, false,
+                    pack, apps, overrides, cover, (done, total) -> {});
+        } finally { cover.recycle(); }
+        try {
+            ThemeEngine.verifyArchive(built.file(), names.size(), IconShape.NONE, false);
+            try (ZipFile archive = new ZipFile(built.file());
+                 ZipInputStream icons = new ZipInputStream(archive.getInputStream(archive.getEntry("icons")))) {
+                int count = 0;
+                for (ZipEntry entry; (entry = icons.getNextEntry()) != null;) {
+                    if (!entry.getName().endsWith(".png")) continue;
+                    check(java.util.Arrays.equals(expectedPngs.get(entry.getName()), icons.readAllBytes()),
+                            "Validated HNT includes the measured PNG unchanged: " + entry.getName());
+                    count++;
+                }
+                check(count == names.size(), "Measured pack HNT contains every expected PNG");
+            }
+        } finally { Files.delete(built.file().toPath()); }
+    }
+
+    private String firstPixelMismatch(Bitmap expected, Bitmap actual) {
+        int width = expected.getWidth(), height = expected.getHeight();
+        if (actual.getWidth() != width || actual.getHeight() != height) return "dimensions differ";
+        int[] expectedPixels = new int[width * height], actualPixels = new int[width * height];
+        expected.getPixels(expectedPixels, 0, width, 0, 0, width, height);
+        actual.getPixels(actualPixels, 0, width, 0, 0, width, height);
+        for (int i = 0; i < expectedPixels.length; i++) {
+            if (expectedPixels[i] != actualPixels[i]) {
+                return (i % width) + "," + (i / width) + " expected "
+                        + Integer.toHexString(expectedPixels[i]) + " got " + Integer.toHexString(actualPixels[i]);
+            }
+        }
+        return null;
     }
 
     private void syntheticMapping(IconRepository.Pack target, IconRepository.Pack real, String component, String icon) {
