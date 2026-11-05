@@ -95,21 +95,51 @@ final class ShapePreview implements AutoCloseable {
                                   Map<String, String> overrides, int visibleSize, String wallpaperPath,
                                   String overlayReference, String backgroundReference, String shapeMaskReference,
                                   List<IconFilters.Filter> filters) throws IOException {
+        return loadStyle(context, apps, pack, overrides, visibleSize, wallpaperPath, overlayReference,
+                backgroundReference, shapeMaskReference, filters, false);
+    }
+
+    static ShapePreview loadStyle(Context context, List<IconRepository.App> apps, IconRepository.Pack pack,
+                                  Map<String, String> overrides, int visibleSize, String wallpaperPath,
+                                  String overlayReference, String backgroundReference, String shapeMaskReference,
+                                  List<IconFilters.Filter> filters, boolean systemOnly) throws IOException {
         ShapePreview preview = new ShapePreview(visibleSize);
         try {
             Collator collator = Collator.getInstance(context.getResources().getConfiguration().getLocales().get(0));
             List<IconRepository.App> sorted = apps.stream().sorted(Comparator
                     .comparing(IconRepository.App::label, collator).thenComparing(IconRepository.App::key)).toList();
             java.util.Set<String> selected = new java.util.HashSet<>();
+            java.util.Set<String> systemExamples = new java.util.HashSet<>(), packedExamples = new java.util.HashSet<>();
             for (IconRepository.App app : sorted) {
                 if (!selected.add(app.component().getPackageName())) continue;
                 String name = pack == null ? null : pack.selected(app, overrides);
-                if (name == null && preview.originals.size() < 3) preview.addSystem(context, app, filters);
-                else if (name != null && preview.packIcons.size() < 3) {
+                if (name == null && preview.originals.size() < 3) {
+                    preview.addSystem(context, app, filters);
+                    systemExamples.add(app.key());
+                }
+                else if (!systemOnly && name != null && preview.packIcons.size() < 3) {
                     preview.packIcons.add(pack.render(name, 192));
                     preview.packLabels.add(app.label());
+                    packedExamples.add(name);
                 }
-                if (preview.originals.size() == 3 && preview.packIcons.size() == 3) break;
+                if (preview.originals.size() == 3 && (systemOnly || preview.packIcons.size() == 3)) break;
+            }
+            if (preview.originals.size() < 3) for (IconRepository.App app : sorted) {
+                if (!systemExamples.add(app.key())) continue;
+                preview.addSystem(context, app, filters);
+                if (preview.originals.size() == 3) break;
+            }
+            if (systemOnly) for (IconRepository.App app : sorted) {
+                if (preview.originals.size() == 6) break;
+                if (systemExamples.add(app.key())) preview.addSystem(context, app, filters);
+            }
+            if (!systemOnly && pack != null && preview.packIcons.size() < 3) {
+                for (IconRepository.Icon icon : pack.icons.values()) {
+                    if (!packedExamples.add(icon.name())) continue;
+                    preview.packIcons.add(pack.render(icon.name(), IconShape.SIZE));
+                    preview.packLabels.add(icon.name());
+                    if (preview.packIcons.size() == 3) break;
+                }
             }
             if (preview.originals.isEmpty() && preview.packIcons.isEmpty())
                 throw new IOException(context.getString(R.string.shape_no_apps));
@@ -191,12 +221,19 @@ final class ShapePreview implements AutoCloseable {
     Bitmap renderStyle(IconShape shape, int[] corners, int overlayScale, boolean overlayClip,
                        int backgroundScale, boolean backgroundClip, Bitmap fileMask, int maskScale,
                        boolean overlayAll, boolean backgroundAll, int iconScale) {
+        return renderStyle(shape, corners, overlayScale, overlayClip, backgroundScale, backgroundClip,
+                fileMask, maskScale, overlayAll, backgroundAll, iconScale, true);
+    }
+
+    Bitmap renderStyle(IconShape shape, int[] corners, int overlayScale, boolean overlayClip,
+                       int backgroundScale, boolean backgroundClip, Bitmap fileMask, int maskScale,
+                       boolean overlayAll, boolean backgroundAll, int iconScale, boolean mixed) {
         Bitmap source = fileMask == null ? shapeMask : fileMask;
         Bitmap scaledMask = shape == IconShape.FILE && source != null && maskScale != 100
                 ? IconMask.scaled(source, maskScale) : null;
         try {
             return renderScene(shape, corners, overlayScale, overlayClip, backgroundScale, backgroundClip,
-                    scaledMask == null ? source : scaledMask, true, overlayAll, backgroundAll, iconScale);
+                    scaledMask == null ? source : scaledMask, mixed, overlayAll, backgroundAll, iconScale);
         } finally { if (scaledMask != null) scaledMask.recycle(); }
     }
 

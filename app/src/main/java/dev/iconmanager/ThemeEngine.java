@@ -337,6 +337,11 @@ final class ThemeEngine {
      */
     static Map<String, String> targets(List<IconRepository.App> apps, IconRepository.Pack pack,
                                        Map<String, String> overrides) throws IOException {
+        return targets(apps, new SelectedIcons(pack, overrides));
+    }
+
+    private static Map<String, String> targets(List<IconRepository.App> apps, SelectedIcons selectedIcons)
+            throws IOException {
         Map<String, List<IconRepository.App>> groups = new LinkedHashMap<>();
         Map<String, List<IconRepository.App>> classOwners = new LinkedHashMap<>();
         for (IconRepository.App app : apps) {
@@ -345,10 +350,10 @@ final class ThemeEngine {
         }
         Map<String, String> targets = new LinkedHashMap<>();
         for (var group : groups.entrySet()) {
-            String common = pack.selected(group.getValue().get(0), overrides);
+            String common = selectedIcons.get(group.getValue().get(0));
             boolean same = true, allThemed = true;
             for (IconRepository.App app : group.getValue()) {
-                String selected = pack.selected(app, overrides);
+                String selected = selectedIcons.get(app);
                 if (!java.util.Objects.equals(common, selected)) same = false;
                 if (selected == null) allThemed = false;
             }
@@ -361,21 +366,21 @@ final class ThemeEngine {
             if (allThemed) {
                 base = common;
                 for (IconRepository.App app : group.getValue()) {
-                    if (sharedClassConflict(app, classOwners, pack, overrides)) base = pack.selected(app, overrides);
+                    if (sharedClassConflict(app, classOwners, selectedIcons)) base = selectedIcons.get(app);
                 }
                 for (IconRepository.App app : group.getValue()) {
                     if (IconRepository.Pack.isLegacyContacts(app.component())
                             && app.component().getClassName().endsWith(".PeopleActivity")) {
-                        base = pack.selected(app, overrides);
+                        base = selectedIcons.get(app);
                     }
                 }
                 addTarget(targets, group.getKey(), base);
             }
             for (IconRepository.App app : group.getValue()) {
-                String selected = pack.selected(app, overrides);
+                String selected = selectedIcons.get(app);
                 if (selected == null || selected.equals(base)) continue;
                 String activity = app.component().getClassName();
-                if (sharedClassConflict(app, classOwners, pack, overrides)) {
+                if (sharedClassConflict(app, classOwners, selectedIcons)) {
                     // Writing the class file would also replace other apps' icons; keep the package icon.
                     Log.w("IconManager", "Skipping shared activity icon " + app.key());
                     continue;
@@ -387,10 +392,10 @@ final class ThemeEngine {
     }
 
     private static boolean sharedClassConflict(IconRepository.App app, Map<String, List<IconRepository.App>> classOwners,
-                                               IconRepository.Pack pack, Map<String, String> overrides) {
-        String selected = pack.selected(app, overrides);
+                                               SelectedIcons selectedIcons) {
+        String selected = selectedIcons.get(app);
         for (IconRepository.App owner : classOwners.get(app.component().getClassName())) {
-            if (!java.util.Objects.equals(selected, pack.selected(owner, overrides))) return true;
+            if (!java.util.Objects.equals(selected, selectedIcons.get(owner))) return true;
         }
         return false;
     }
@@ -398,13 +403,18 @@ final class ThemeEngine {
     static Map<String, String> exportTargets(List<IconRepository.App> apps, IconRepository.Pack pack,
                                               Map<String, String> overrides, boolean fullPack) throws IOException {
         apps = exportApps(apps, overrides, fullPack);
+        return exportTargets(apps, pack, new SelectedIcons(pack, overrides), fullPack);
+    }
+
+    private static Map<String, String> exportTargets(List<IconRepository.App> apps, IconRepository.Pack pack,
+                                                     SelectedIcons selectedIcons, boolean fullPack) throws IOException {
         Map<String, String> result = new LinkedHashMap<>();
         if (fullPack) {
             // Future installations resolve through their package key, not another app's activity name.
             result.putAll(pack.byPackage);
             for (IconRepository.App app : apps) result.remove(app.component().getPackageName());
         }
-        Map<String, String> installed = targets(apps, pack, overrides);
+        Map<String, String> installed = targets(apps, selectedIcons);
         for (var entry : installed.entrySet()) addTarget(result, entry.getKey(), entry.getValue());
         return result;
     }
@@ -412,14 +422,48 @@ final class ThemeEngine {
     static int exportCount(List<IconRepository.App> apps, IconRepository.Pack pack,
                            Map<String, String> overrides, boolean fullPack) {
         apps = exportApps(apps, overrides, fullPack);
+        return exportCount(apps, pack, new SelectedIcons(pack, overrides), fullPack);
+    }
+
+    private static int exportCount(List<IconRepository.App> apps, IconRepository.Pack pack,
+                                   SelectedIcons selectedIcons, boolean fullPack) {
         int count = 0;
         java.util.Set<String> installed = new java.util.HashSet<>();
         for (IconRepository.App app : apps) {
             installed.add(app.component().getPackageName());
-            if (pack.selected(app, overrides) != null) count++;
+            if (selectedIcons.get(app) != null) count++;
         }
         if (fullPack) for (String packageName : pack.byPackage.keySet()) if (!installed.contains(packageName)) count++;
         return count;
+    }
+
+    record ExportPlan(Map<String, String> targets, int count) {}
+
+    static ExportPlan exportPlan(List<IconRepository.App> apps, IconRepository.Pack pack,
+                                 Map<String, String> overrides, boolean fullPack) throws IOException {
+        List<IconRepository.App> exported = exportApps(apps, overrides, fullPack);
+        SelectedIcons selectedIcons = new SelectedIcons(pack, overrides);
+        return new ExportPlan(exportTargets(exported, pack, selectedIcons, fullPack),
+                exportCount(exported, pack, selectedIcons, fullPack));
+    }
+
+    private static final class SelectedIcons {
+        private final IconRepository.Pack pack;
+        private final Map<String, String> overrides;
+        private final Map<String, String> selected = new java.util.HashMap<>();
+
+        SelectedIcons(IconRepository.Pack pack, Map<String, String> overrides) {
+            this.pack = pack;
+            this.overrides = overrides;
+        }
+
+        String get(IconRepository.App app) {
+            String key = app.key();
+            if (selected.containsKey(key)) return selected.get(key);
+            String value = pack.selected(app, overrides);
+            selected.put(key, value);
+            return value;
+        }
     }
 
     private static List<IconRepository.App> exportApps(List<IconRepository.App> apps,
@@ -589,8 +633,9 @@ final class ThemeEngine {
         if (overlay != null) IconOverlay.validateRendered(overlay);
         if (background != null) IconBackground.validate(background);
         overrides = withFilteredSystemIcons(apps, pack, overrides, filters);
-        Map<String, String> targets = exportTargets(apps, pack, overrides, fullPack);
-        int count = exportCount(apps, pack, overrides, fullPack);
+        ExportPlan plan = exportPlan(apps, pack, overrides, fullPack);
+        Map<String, String> targets = plan.targets();
+        int count = plan.count();
         if (count == 0) throw new IOException(context.getString(R.string.empty_export));
         int maskSize = shape == IconShape.NONE ? IconShape.SIZE - 2 * IconShape.INSET : pack.fallbackSize();
         Bitmap border = overlay == null ? null : IconOverlay.border(overlay, shape, corners, maskSize, overlayClip, shapeMask);

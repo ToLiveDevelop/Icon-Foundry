@@ -92,7 +92,7 @@ final class FileIcons {
         return new File(directory, reference.substring(PREFIX.length()) + ".png");
     }
 
-    private static void validate(String reference, byte[] bytes) throws IOException {
+    static void validate(String reference, byte[] bytes) throws IOException {
         if (!reference.equals(PREFIX + "i" + digest(bytes))) throw new IOException(App.text(R.string.icon_corrupt));
         BitmapFactory.Options options = new BitmapFactory.Options();
         options.inJustDecodeBounds = true;

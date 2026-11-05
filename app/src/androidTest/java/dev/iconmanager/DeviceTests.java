@@ -86,7 +86,19 @@ public final class DeviceTests extends Instrumentation {
             return;
         }
         if ("true".equals(arguments.getString("packDiscoveryOnly"))) {
-        verifyPackDiscoveryStopsAtFirstMatch();
+            verifyPackDiscoveryStopsAtFirstMatch();
+            return;
+        }
+        if ("true".equals(arguments.getString("templateBackupOnly"))) {
+            verifyTemplateBackup(context);
+            return;
+        }
+        if ("true".equals(arguments.getString("multiPackOnly"))) {
+            verifyMultiPack(new IconRepository(context).load(arguments.getString("pack", "com.maxpatchs.premium")));
+            return;
+        }
+        if ("true".equals(arguments.getString("inlineStyleOnly"))) {
+            verifyInlineStyleFixture(context);
             return;
         }
         if ("true".equals(arguments.getString("perPackResolutionUiOnly"))) {
@@ -119,6 +131,7 @@ public final class DeviceTests extends Instrumentation {
             return;
         }
         verifyCoverAndReplacement(context);
+        verifyTemplateBackup(context);
         Bitmap previewSource = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
         previewSource.eraseColor(android.graphics.Color.RED);
         try {
@@ -480,6 +493,134 @@ public final class DeviceTests extends Instrumentation {
         } finally { Files.deleteIfExists(invalid.toPath()); }
         check(context.getCacheDir().listFiles((dir, name) -> name.startsWith("sample-")).length == 0, "Reference temporary files cleaned up");
         verifySettingsUi(context);
+        verifyInlineStyleFixture(context);
+    }
+
+    private void verifyTemplateBackup(Context context) throws Exception {
+        File testRoot = new File(context.getCacheDir(), "template-backup-check-" + Long.toUnsignedString(System.nanoTime()));
+        File sourceDirectory = new File(testRoot, "source");
+        File targetDirectory = new File(testRoot, "target");
+        Files.createDirectories(sourceDirectory.toPath());
+        Files.createDirectories(targetDirectory.toPath());
+        Context sourceContext = new android.content.ContextWrapper(context) {
+            @Override public File getFilesDir() { return sourceDirectory; }
+        };
+        Context targetContext = new android.content.ContextWrapper(context) {
+            @Override public File getFilesDir() { return targetDirectory; }
+        };
+        Bitmap image = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888);
+        image.eraseColor(Color.rgb(210, 80, 40));
+        try {
+            String reference = FileIcons.save(sourceContext, image);
+            File coverFile = new File(sourceDirectory, "backup-cover.jpg");
+            File wallpaperFile = new File(sourceDirectory, "backup-wallpaper.jpg");
+            try (FileOutputStream output = new FileOutputStream(coverFile)) {
+                check(image.compress(Bitmap.CompressFormat.JPEG, 95, output), "Backup test cover encoded");
+            }
+            try (FileOutputStream output = new FileOutputStream(wallpaperFile)) {
+                check(image.compress(Bitmap.CompressFormat.JPEG, 95, output), "Backup test wallpaper encoded");
+            }
+            byte[] expectedIcon = FileIcons.bytes(sourceContext, reference);
+            byte[] expectedCover = Files.readAllBytes(coverFile.toPath());
+            byte[] expectedWallpaper = Files.readAllBytes(wallpaperFile.toPath());
+
+            TemplateStore source = new TemplateStore(sourceContext);
+            Draft withAssets = new Draft();
+            withAssets.packs.add("dev.test.backup");
+            withAssets.title = "Template with media";
+            withAssets.tree = "content://device-specific/tree";
+            withAssets.coverPath = coverFile.getName();
+            withAssets.wallpaperPath = wallpaperFile.getName();
+            withAssets.overlay = reference;
+            withAssets.background = reference;
+            withAssets.shape = IconShape.FILE;
+            withAssets.shapeFile = reference;
+            withAssets.overrides.put("dev.test.app/dev.test.app.Main", reference);
+            TemplateStore.Entry first = source.save(withAssets, "Backup test pack", true);
+            Draft secondDraft = new Draft();
+            secondDraft.packs.add("dev.test.backup");
+            secondDraft.title = "Second template";
+            source.save(secondDraft, "Backup test pack", true);
+            byte[] firstBackup = source.backup();
+            org.json.JSONArray portableTemplates = new org.json.JSONObject(
+                    new String(firstBackup, StandardCharsets.UTF_8)).getJSONArray("templates");
+            org.json.JSONObject portableFirst = null;
+            for (int i = 0; i < portableTemplates.length(); i++) {
+                org.json.JSONObject candidate = portableTemplates.getJSONObject(i);
+                if (candidate.getString("id").equals(first.id())) portableFirst = candidate;
+            }
+            if (portableFirst == null) throw new AssertionError("Backup fixture template is missing");
+            org.json.JSONObject portableSettings = portableFirst.getJSONObject("settings");
+            check(portableSettings.getString("tree").isEmpty() && portableSettings.getString("coverPath").isEmpty()
+                            && portableSettings.getString("wallpaperPath").isEmpty(),
+                    "Backup excludes device-specific folders and local media paths");
+
+            TemplateStore target = new TemplateStore(targetContext);
+            TemplateStore.MergeResult initial = target.restoreBackup(firstBackup);
+            check(initial.imported() == 2 && initial.retained() == 0 && target.list().size() == 2,
+                    "Backup imports every template");
+            Draft restored = target.open(first.id());
+            check(restored.tree.isEmpty() && restored.shape == IconShape.FILE
+                            && restored.overlay.equals(reference) && restored.background.equals(reference)
+                            && restored.shapeFile.equals(reference),
+                    "Restore keeps media references and clears the device-specific export folder");
+            check(java.util.Arrays.equals(expectedIcon, FileIcons.bytes(targetContext, reference))
+                            && java.util.Arrays.equals(expectedCover,
+                            Files.readAllBytes(new File(targetDirectory, "template-cover.jpg").toPath()))
+                            && java.util.Arrays.equals(expectedWallpaper,
+                            Files.readAllBytes(new File(targetDirectory, "template-wallpaper.jpg").toPath())),
+                    "Backup restores custom icon, cover and wallpaper bytes");
+
+            restored.title = "Edited on this device";
+            target.save(restored, "Backup test pack", false);
+            Draft localOnly = new Draft();
+            localOnly.packs.add("dev.test.backup");
+            localOnly.title = "Local-only template";
+            TemplateStore.Entry local = target.save(localOnly, "Backup test pack", true);
+            Draft thirdDraft = new Draft();
+            thirdDraft.packs.add("dev.test.backup");
+            thirdDraft.title = "Added later";
+            source.save(thirdDraft, "Backup test pack", true);
+            TemplateStore.MergeResult merged = target.restoreBackup(source.backup());
+            check(merged.imported() == 1 && merged.retained() == 2 && target.list().size() == 4,
+                    "Restore adds only missing IDs and preserves local-only templates");
+            check(target.open(first.id()).title.equals("Edited on this device")
+                            && target.list().stream().anyMatch(entry -> entry.id().equals(local.id())),
+                    "A matching ID never overwrites the current template");
+
+            File storeFile = new File(targetDirectory, "templates.json");
+            byte[] beforeInvalidRestore = Files.readAllBytes(storeFile.toPath());
+            byte[] damaged = source.backup();
+            damaged[0] ^= 1;
+            expectFailure(() -> target.restoreBackup(damaged), "Damaged backup is rejected");
+
+            org.json.JSONObject invalidMedia = new org.json.JSONObject(new String(source.backup(), StandardCharsets.UTF_8));
+            org.json.JSONArray items = invalidMedia.getJSONArray("templates");
+            org.json.JSONObject mediaItem = null;
+            for (int i = 0; i < items.length(); i++) {
+                org.json.JSONObject candidate = items.getJSONObject(i);
+                if (candidate.getJSONObject("fileIcons").length() > 0) {
+                    mediaItem = candidate;
+                    break;
+                }
+            }
+            if (mediaItem == null) throw new AssertionError("Backup fixture has no file icons");
+            mediaItem.put("fileIcons", new org.json.JSONObject());
+            String mediaDigest = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(items.toString().getBytes(StandardCharsets.UTF_8)));
+            invalidMedia.put("sha256", mediaDigest);
+            expectFailure(() -> target.restoreBackup(invalidMedia.toString().getBytes(StandardCharsets.UTF_8)),
+                    "Backup with missing media is rejected even with a matching checksum");
+            check(java.util.Arrays.equals(beforeInvalidRestore, Files.readAllBytes(storeFile.toPath())),
+                    "Rejected backups leave the existing template store byte-for-byte unchanged");
+        } finally {
+            image.recycle();
+            if (testRoot.exists()) {
+                try (var paths = Files.walk(testRoot.toPath())) {
+                    for (var path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
+                }
+            }
+        }
     }
 
     private void verifySettingsUi(Context context) throws Exception {
@@ -525,6 +666,9 @@ public final class DeviceTests extends Instrumentation {
                     } catch (ReflectiveOperationException error) { throw new AssertionError(error); }
                     android.app.Dialog dialog = (android.app.Dialog) field(activity, "settingsDialog");
                     android.view.View decor = dialog.getWindow().getDecorView();
+                    check(findText(decor, activity.getString(R.string.backup_templates)) != null
+                                    && findText(decor, activity.getString(R.string.restore_templates)) != null,
+                            "Settings provide both template backup and restore actions");
                     int label = mode.equals("light") ? R.string.theme_light
                             : mode.equals("dark") ? R.string.theme_dark : R.string.theme_system;
                     android.widget.TextView themeChoice = findText(decor, activity.getString(label));
@@ -578,6 +722,28 @@ public final class DeviceTests extends Instrumentation {
                     verifyFiltersUi(result);
                     verifyPositionUi(result);
                 }
+                if (mode.equals("light")) {
+                    runOnMainChecked(() -> { if (!(boolean) field(result, "editing")) result.openEditor(); });
+                    waitForWork(result);
+                    runOnMainChecked(() -> {
+                        @SuppressWarnings("unchecked")
+                        List<android.widget.Button> navigation =
+                                (List<android.widget.Button>) field(result, "editorTabs");
+                        android.view.View bar = (android.view.View) navigation.get(0).getParent();
+                        android.widget.LinearLayout.LayoutParams params =
+                                (android.widget.LinearLayout.LayoutParams) bar.getLayoutParams();
+                        check(params.bottomMargin >= Math.round(8 * result.getResources().getDisplayMetrics().density),
+                                "Main navigation keeps a bottom safety gap in light mode");
+                        for (android.widget.Button tab : navigation) {
+                            check(tab.getBottom() <= bar.getHeight() - bar.getPaddingBottom(),
+                                    "Main navigation tab fits above its bottom padding in light mode");
+                            check(tab.getStateListAnimator() == null && tab.getElevation() == 0
+                                            && tab.getTranslationZ() == 0 && tab.getMinWidth() == 0
+                                            && tab.getMaxLines() == 2 && tab.getLayoutParams().height == -2,
+                                    "Main navigation adapts to labels without clipped light-theme shadows");
+                        }
+                    });
+                }
             }
         } finally {
             runOnMainChecked(() -> {
@@ -617,16 +783,17 @@ public final class DeviceTests extends Instrumentation {
             check(preview.getDrawable() instanceof android.graphics.drawable.BitmapDrawable
                             && activity.getString(R.string.style_preview).contentEquals(preview.getContentDescription()),
                     "Style tab shows its universal six-icon preview");
-            check(Math.abs(preview.getWidth() * (float) ShapePreview.HEIGHT / ShapePreview.WIDTH
-                            - preview.getHeight()) <= 1,
-                    "Universal style preview preserves the scene aspect ratio");
+            check(preview.getScaleType() == android.widget.ImageView.ScaleType.CENTER_CROP
+                            && preview.getHeight() > 0,
+                    "Universal style preview fits the available space without stretching");
             @SuppressWarnings("unchecked")
             List<android.view.View> pages = (List<android.view.View>) field(activity, "editorPages");
             android.view.ViewGroup page = (android.view.ViewGroup) pages.get(1);
             android.view.View stage = page.findViewWithTag("style-stage");
             android.view.View tabs = page.findViewWithTag("style-tabs");
             android.widget.ScrollView scroll = page.findViewWithTag("style-scroll");
-            check(stage.getParent() == page && tabs.getParent() == page && scroll.getParent() == page
+            check(stage.getParent() == page && tabs.getParent() == scroll.getParent()
+                            && ((android.view.View) tabs.getParent()).getParent() == page
                             && preview.getParent() == stage,
                     "Style preview and inner tabs are pinned above the scrolling controls");
             int pinnedTop = stage.getTop();
@@ -643,8 +810,18 @@ public final class DeviceTests extends Instrumentation {
             @SuppressWarnings("unchecked")
             List<android.widget.LinearLayout> sections =
                     (List<android.widget.LinearLayout>) field(activity, "styleSections");
-            check(innerTabs.size() == 3 && sections.size() == 3,
-                    "Style has Background, Overlay and Icon options tabs");
+            check(innerTabs.size() == 4 && sections.size() == 4,
+                    "Style has Background, Overlay, Icon options and Filters tabs");
+            @SuppressWarnings("unchecked")
+            List<android.widget.Button> navigation = (List<android.widget.Button>) field(activity, "editorTabs");
+            android.view.View navigationBar = navigation.get(0).getParent() instanceof android.view.View view ? view : null;
+            android.widget.LinearLayout.LayoutParams navigationParams =
+                    (android.widget.LinearLayout.LayoutParams) navigationBar.getLayoutParams();
+            check(navigationParams.bottomMargin >= Math.round(8 * activity.getResources().getDisplayMetrics().density),
+                    "Main navigation keeps a bottom safety gap");
+            for (android.widget.Button tab : navigation)
+                check(tab.getBottom() <= navigationBar.getHeight() - navigationBar.getPaddingBottom(),
+                        "Main navigation tab fits above its bottom padding");
             for (int i = 0; i < innerTabs.size(); i++) {
                 innerTabs.get(i).performClick();
                 for (int section = 0; section < sections.size(); section++) {
@@ -655,6 +832,200 @@ public final class DeviceTests extends Instrumentation {
                 check(preview.isShown(), "Style preview remains visible on inner tab " + i);
             }
         });
+    }
+
+    private void verifyInlineStyleFixture(Context context) throws Exception {
+        IconRepository repository = new IconRepository(context);
+        IconRepository.Pack pack = repository.load("com.maxpatchs.premium");
+        List<IconRepository.App> installed = repository.apps();
+        String icon = pack.icons.keySet().iterator().next();
+        Map<String, String> allAssigned = new LinkedHashMap<>();
+        for (IconRepository.App app : installed) allAssigned.put(app.key(), icon);
+        try (ShapePreview scene = ShapePreview.loadStyle(context, installed, pack, allAssigned,
+                pack.fallbackSize(), "", "", "", "", List.of())) {
+            check(((List<?>) field(scene, "originals")).size() == 3, "Fully covered pack still shows three system examples");
+        }
+        Map<String, String> noneAssigned = new LinkedHashMap<>();
+        for (IconRepository.App app : installed) noneAssigned.put(app.key(), "");
+        try (ShapePreview scene = ShapePreview.loadStyle(context, installed, pack, noneAssigned,
+                pack.fallbackSize(), "", "", "", "", List.of())) {
+            check(((List<?>) field(scene, "packIcons")).size() == 3, "Catalogue fills missing installed pack examples");
+        }
+        for (Map<String, String> assigned : List.of(allAssigned, noneAssigned)) {
+            try (ShapePreview normal = ShapePreview.loadStyle(context, installed, pack, assigned,
+                    pack.fallbackSize(), "", "", "", "", List.of());
+                 ShapePreview filters = ShapePreview.loadStyle(context, installed, pack, assigned,
+                         pack.fallbackSize(), "", "", "", "", List.of(), true)) {
+                List<?> originals = (List<?>) field(normal, "originals");
+                List<?> filtered = (List<?>) field(filters, "originals");
+                for (int i = 0; i < 3; i++)
+                    check(((Bitmap) originals.get(i)).sameAs((Bitmap) filtered.get(i)),
+                            "Switching to Filters leaves the first system row unchanged: " + i);
+            }
+        }
+        MainActivity activity = (MainActivity) startActivitySync(new android.content.Intent(context, MainActivity.class)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK));
+        Draft original = null;
+        Bitmap before = null;
+        java.util.Set<String> beforeFiles = new java.util.HashSet<>();
+        File[] existing = FileIcons.directory(context).listFiles();
+        if (existing != null) for (File file : existing) beforeFiles.add(file.getName());
+        Bitmap layer = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888);
+        android.graphics.Paint layerPaint = new android.graphics.Paint();
+        layerPaint.setColor(Color.argb(160, 30, 190, 240));
+        new android.graphics.Canvas(layer).drawRect(24, 24, 168, 96, layerPaint);
+        String layerRef;
+        try { layerRef = FileIcons.save(context, layer); } finally { layer.recycle(); }
+        try {
+            waitForWork(activity);
+            original = (Draft) field(activity, "draft");
+            Draft fixture = Draft.fromJson(original.toJson());
+            fixture.packs.clear(); fixture.packs.add(pack.packageName);
+            fixture.shape = IconShape.CIRCLE; fixture.shapeFile = ""; fixture.maskScale = 100;
+            fixture.background = layerRef; fixture.overlay = layerRef; fixture.filters.clear(); fixture.overrides.clear();
+            fixture.backgroundAll = true; fixture.overlayAll = true;
+            fixture.backgroundScale = 100; fixture.overlayScale = 100;
+            fixture.iconScale = 100;
+            var build = MainActivity.class.getDeclaredMethod("buildScreen");
+            build.setAccessible(true);
+            runOnMainChecked(() -> {
+                setField(activity, "draft", fixture);
+                setField(activity, "pack", pack);
+                setField(activity, "apps", installed);
+                setField(activity, "editing", true);
+                build.invoke(activity);
+            });
+            waitForThumbnails(activity);
+            verifyStyleUi(activity);
+            runOnMainChecked(() -> {
+                activity.getWindow().getDecorView().findViewWithTag("style-tab-2").performClick();
+                android.widget.ImageView preview = (android.widget.ImageView) field(activity, "stylePreview");
+                check(activity.getWindow().getDecorView().findViewWithTag("style-icon-scale").isShown(),
+                        "Icon scale belongs to inline settings");
+                android.view.View decor = activity.getWindow().getDecorView();
+                check(decor.findViewWithTag("style-shape-presets").isShown()
+                                && !decor.findViewWithTag("style-shape-editor").isShown()
+                                && !decor.findViewWithTag("style-shape-file").isShown(),
+                        "Shape presets retain the illustrated grid with separate editor and PNG tabs");
+                check(((android.view.ViewGroup) decor.findViewWithTag("style-shape-presets")).getChildCount() == 3,
+                        "Ten illustrated shape choices occupy three grid rows");
+                android.widget.LinearLayout presets = decor.findViewWithTag("style-shape-presets");
+                check(presets.getTop() >= Math.round(8 * context.getResources().getDisplayMetrics().density),
+                        "Preset grid has a gap below its tabs");
+                decor.findViewWithTag("style-shape-tab-file").performClick();
+                check(decor.findViewWithTag("style-shape-file").isShown()
+                                && !decor.findViewWithTag("style-shape-presets").isShown()
+                                && fixture.shape == IconShape.CIRCLE,
+                        "PNG tab exposes file controls without applying a missing mask");
+                decor.findViewWithTag("style-shape-tab-editor").performClick();
+                check(decor.findViewWithTag("style-corner-0").isShown(),
+                        "Corner editor is visible on its own inline tab");
+            });
+            waitForThumbnails(activity);
+            before = ((android.graphics.drawable.BitmapDrawable) ((android.widget.ImageView) field(activity,
+                    "stylePreview")).getDrawable()).getBitmap().copy(Bitmap.Config.ARGB_8888, false);
+            runOnMainChecked(() -> activity.getWindow().getDecorView()
+                    .findViewWithTag("style-icon-scale-decrease").performClick());
+            waitForThumbnails(activity);
+            check(fixture.iconScale == 99 && Draft.load(context).iconScale == 99, "Inline icon scale is saved immediately");
+            Bitmap after = ((android.graphics.drawable.BitmapDrawable) ((android.widget.ImageView) field(activity,
+                    "stylePreview")).getDrawable()).getBitmap();
+            check(!before.sameAs(after), "Inline icon scale updates the pinned scene");
+            before.recycle();
+            before = after.copy(Bitmap.Config.ARGB_8888, false);
+            runOnMainChecked(() -> {
+                android.view.View decor = activity.getWindow().getDecorView();
+                decor.findViewWithTag("style-tab-0").performClick();
+                check(decor.findViewWithTag("style-background-scale").isShown(), "Background scale is inline");
+                decor.findViewWithTag("style-background-scale-decrease").performClick();
+            });
+            waitForThumbnails(activity);
+            check(fixture.backgroundScale == 99 && Draft.load(context).backgroundScale == 99,
+                    "Background scale saves without modal confirmation");
+            runOnMainChecked(() -> {
+                android.view.View decor = activity.getWindow().getDecorView();
+                decor.findViewWithTag("style-tab-1").performClick();
+                check(decor.findViewWithTag("style-overlay-scale").isShown(), "Overlay scale is inline");
+                decor.findViewWithTag("style-overlay-scale-increase").performClick();
+            });
+            waitForThumbnails(activity);
+            check(fixture.overlayScale == 101 && Draft.load(context).overlayScale == 101,
+                    "Overlay scale saves without modal confirmation");
+            after = ((android.graphics.drawable.BitmapDrawable) ((android.widget.ImageView) field(activity,
+                    "stylePreview")).getDrawable()).getBitmap();
+            check(!before.sameAs(after), "Layer edits update the same pinned preview");
+            runOnMainChecked(() -> activity.getWindow().getDecorView().findViewWithTag("style-tab-2").performClick());
+            runOnMainChecked(() -> activity.getWindow().getDecorView()
+                    .findViewWithTag("style-corner-0-decrease").performClick());
+            waitForThumbnails(activity);
+            check(fixture.shape == IconShape.CUSTOM, "Inline corner arrows select custom shape immediately");
+            runOnMainChecked(() -> {
+                android.view.View decor = activity.getWindow().getDecorView();
+                check(decor.findViewWithTag("style-preview-loading") == null,
+                        "Changing style never overlays a loading spinner");
+                decor.findViewWithTag("style-tab-3").performClick();
+                check(decor.findViewWithTag("filter-add").isShown()
+                                && decor.findViewWithTag("filters") == null,
+                        "Filters have their own inline tab, not a modal launch button");
+                decor.findViewWithTag("filter-add").performClick();
+                android.app.AlertDialog chooser = (android.app.AlertDialog) field(activity, "filterTypeDialog");
+                chooser.getListView().performItemClick(null, 0, 0);
+                decor.findViewWithTag("filter-0-brightness-increase").performClick();
+                check(Draft.load(context).filters.size() == 1
+                                && ((IconFilters.ColorCorrection) Draft.load(context).filters.get(0)).values[0] == 1,
+                        "Inline filter creation and slider edits save immediately");
+            });
+            waitForThumbnails(activity);
+            for (boolean filtersMode : new boolean[]{true, false}) {
+                runOnMainChecked(() -> activity.getWindow().getDecorView()
+                        .findViewWithTag(filtersMode ? "style-tab-3" : "style-tab-0").performClick());
+                waitForThumbnails(activity);
+                android.widget.ImageView preview = (android.widget.ImageView) field(activity, "stylePreview");
+                Bitmap actual = ((android.graphics.drawable.BitmapDrawable) preview.getDrawable()).getBitmap();
+                check(preview.getScaleType() == android.widget.ImageView.ScaleType.CENTER_CROP,
+                        "Preview background fills the stage without letterboxing");
+                try (ShapePreview scene = ShapePreview.loadStyle(context, installed, pack, fixture.overrides,
+                        pack.fallbackSize(), fixture.wallpaperPath, fixture.overlay, fixture.background,
+                        "", fixture.filters, filtersMode)) {
+                    if (filtersMode) check(((List<?>) field(scene, "originals")).size() == 6
+                                    && ((List<?>) field(scene, "packIcons")).isEmpty(),
+                            "Filters use six system originals across both rows");
+                    Bitmap expected = scene.renderStyle(fixture.shape, fixture.corners, fixture.overlayScale,
+                            fixture.overlayClip, fixture.backgroundScale, fixture.backgroundClip, null,
+                            fixture.maskScale, fixture.overlayAll, fixture.backgroundAll, fixture.iconScale,
+                            !filtersMode);
+                    try { check(actual.sameAs(expected), filtersMode
+                            ? "Filters tab renders both rows as system icons with live effects"
+                            : "Leaving Filters restores pack icons in the second row"); }
+                    finally { expected.recycle(); }
+                }
+            }
+            runOnMainChecked(() -> activity.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
+            android.os.SystemClock.sleep(800);
+            waitForIdleSync();
+            runOnMainChecked(() -> {
+                android.view.View stage = activity.getWindow().getDecorView().findViewWithTag("style-stage");
+                android.view.View scroll = activity.getWindow().getDecorView().findViewWithTag("style-scroll");
+                check(stage.getWidth() <= ((android.view.View) stage.getParent()).getWidth() / 3 + 1
+                                && stage.getHeight() > 0
+                                && scroll.getHeight() >= 48 * context.getResources().getDisplayMetrics().density,
+                        "Landscape preview leaves usable space for scrolling controls: stage=" + stage.getHeight()
+                                + ", page=" + ((android.view.View) stage.getParent()).getHeight() + ", scroll=" + scroll.getHeight());
+                check(field(activity, "shapeDialog") == null && field(activity, "backgroundDialog") == null,
+                        "Inline settings do not open old modal editors");
+            });
+        } finally {
+            if (before != null) before.recycle();
+            Draft restored = original;
+            runOnMainChecked(() -> {
+                if (restored != null) { setField(activity, "draft", restored); restored.save(activity); }
+                activity.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+                activity.finish();
+            });
+            String layerName = layerRef.substring("fileicon:".length()) + ".png";
+            if (!beforeFiles.contains(layerName))
+                Files.deleteIfExists(new File(FileIcons.directory(context), layerName).toPath());
+        }
     }
 
     private void verifyShapeExamples(Context context, IconRepository.Pack pack) throws Exception {
@@ -828,6 +1199,9 @@ public final class DeviceTests extends Instrumentation {
                         android.view.View tab = decor.findViewWithTag(tag);
                         check(tab.getStateListAnimator() == null && tab.getElevation() == 0 && tab.getTranslationZ() == 0,
                                 "Shape selector tabs have no resting or pressed elevation: " + tag);
+                        check(((android.widget.Button) tab).getMinWidth() == 0
+                                        && ((android.widget.Button) tab).getMaxLines() == 2,
+                                "Shape selector tabs fit narrow layouts without clipping their labels: " + tag);
                     }
                     check(fileTab != null, "Shape popup offers a PNG mask tab");
                     fileTab.performClick();
@@ -1055,8 +1429,9 @@ public final class DeviceTests extends Instrumentation {
                 android.view.View decor = activity.getWindow().getDecorView();
                 check(decor.findViewWithTag("icon-scale") == null,
                         "Icon scale is no longer duplicated in theme options");
-                check(decor.findViewWithTag("background-settings").getVisibility() == android.view.View.GONE,
-                        "Background settings are hidden without a selected background");
+                check(decor.findViewWithTag("background-settings") == null
+                                && decor.findViewWithTag("style-background-scale") != null,
+                        "Background controls are inline rather than behind a settings button");
                 IconRepository.Pack pack = (IconRepository.Pack) field(activity, "pack");
                 int size = pack.iconSize();
                 android.widget.TextView info = (android.widget.TextView) field(activity, "iconSizeInfo");
@@ -1114,7 +1489,13 @@ public final class DeviceTests extends Instrumentation {
                                     ? overlayGroup.getTag() : null),
                             "Cover and wallpaper stay together on Basics; layers occupy their Style tabs");
                     String unchanged = isolated.toJson().toString();
-                    for (String section : List.of("coverSection", "wallpaperSection", "backgroundSection", "overlaySection")) {
+                    for (String section : List.of("backgroundSection", "overlaySection")) {
+                        Object optional = field(activity, section);
+                        check(((android.view.View) field(optional, "content")).getVisibility() == android.view.View.VISIBLE
+                                        && ((android.view.View) field(optional, "toggle")).getParent() == null,
+                                "Style layers are always expanded without a card heading or collapse button: " + section);
+                    }
+                    for (String section : List.of("coverSection", "wallpaperSection")) {
                         Object optional = field(activity, section);
                         android.view.View content = (android.view.View) field(optional, "content");
                         android.view.View toggle = (android.view.View) field(optional, "toggle");
@@ -1180,7 +1561,7 @@ public final class DeviceTests extends Instrumentation {
                 check(isolated.overlay.isEmpty() && !isolated.overlayAll && scope.getVisibility() == android.view.View.GONE,
                         "Removing overlay clears its saved scope and controls");
                 build.invoke(activity);
-                for (String section : List.of("coverSection", "wallpaperSection", "overlaySection")) {
+                for (String section : List.of("coverSection", "wallpaperSection")) {
                     check(((android.view.View) field(field(activity, section), "content")).getVisibility()
                                     == android.view.View.GONE,
                             "Cleared optional section reopens collapsed: " + section);
@@ -1222,7 +1603,7 @@ public final class DeviceTests extends Instrumentation {
                 setField(activity, "draft", isolated);
                 build.invoke(activity);
                 check(((android.view.View) field(field(activity, "backgroundSection"), "content")).getVisibility()
-                                == android.view.View.GONE, "Empty background card starts collapsed");
+                                == android.view.View.VISIBLE, "Empty background controls remain visible");
                 check(((android.view.View) field(activity, "backgroundScope")).getVisibility() == android.view.View.GONE,
                         "Background scope is hidden before import");
                 isolated.save(activity);
@@ -1304,23 +1685,23 @@ public final class DeviceTests extends Instrumentation {
                         "Confirming the background saves icon scale");
                 check(((android.view.View) field(field(activity, "backgroundSection"), "content")).getVisibility()
                                 == android.view.View.VISIBLE, "Selecting a background expands its card");
-                android.view.View settings = activity.getWindow().getDecorView().findViewWithTag("background-settings");
-                check(settings.getVisibility() == android.view.View.VISIBLE, "Selected background exposes its settings button");
-                settings.performClick();
+                check(((android.widget.SeekBar) activity.getWindow().getDecorView()
+                                .findViewWithTag("style-background-scale")).getProgress() == 100,
+                        "Inline background controls reflect imported settings");
             });
             waitForWork(activity);
             waitForThumbnails(activity);
             runOnMainChecked(() -> {
-                android.app.Dialog dialog = (android.app.Dialog) field(activity, "backgroundDialog");
-                android.view.View decor = dialog.getWindow().getDecorView();
-                check(((android.widget.SeekBar) decor.findViewWithTag("icon-scale")).getProgress() == 60
-                                && ((android.widget.SeekBar) decor.findViewWithTag("background-scale")).getProgress() == 100,
-                        "Settings reopen the same background dialog with saved scales");
-                decor.findViewWithTag("icon-scale-increase").performClick();
-                decor.findViewWithTag("background-scale-decrease").performClick();
-                dialog.dismiss();
-                check(isolated.iconScale == 60 && isolated.backgroundScale == 100,
-                        "Dismissing background settings discards both scale changes");
+                android.view.View decor = activity.getWindow().getDecorView();
+                check(((android.widget.SeekBar) decor.findViewWithTag("style-icon-scale")).getProgress() == 60
+                                && ((android.widget.SeekBar) decor.findViewWithTag("style-background-scale")).getProgress() == 100,
+                        "Inline settings reflect saved scales");
+                decor.findViewWithTag("style-icon-scale-increase").performClick();
+                decor.findViewWithTag("style-background-scale-decrease").performClick();
+                check(isolated.iconScale == 61 && isolated.backgroundScale == 99,
+                        "Inline settings apply immediately");
+                decor.findViewWithTag("style-icon-scale-decrease").performClick();
+                decor.findViewWithTag("style-background-scale-increase").performClick();
                 ((android.view.View) field(activity, "shapeButton")).performClick();
             });
             waitForThumbnails(activity);
@@ -1417,8 +1798,9 @@ public final class DeviceTests extends Instrumentation {
                 check(isolated.background.isEmpty() && !isolated.backgroundAll && isolated.backgroundClip
                                 && isolated.backgroundScale == 100 && !isolated.toJson().has("background"),
                         "Removing a background clears its reference and resets related settings");
-                check(activity.getWindow().getDecorView().findViewWithTag("background-settings").getVisibility()
-                                == android.view.View.GONE, "Removing a background hides its settings button");
+                check(((android.widget.SeekBar) activity.getWindow().getDecorView()
+                                .findViewWithTag("style-background-scale")).getProgress() == 100,
+                        "Removing a background resets the inline scale");
                 ((android.view.View) field(activity, "shapeButton")).performClick();
             });
             waitForThumbnails(activity);
@@ -1705,16 +2087,22 @@ public final class DeviceTests extends Instrumentation {
     }
 
     private void waitForThumbnails(MainActivity activity) throws Exception {
-        var executor = (java.util.concurrent.ExecutorService) field(activity, "thumbnails");
-        var ready = new java.util.concurrent.CountDownLatch(2);
-        List<java.util.concurrent.Future<?>> barriers = new ArrayList<>();
-        for (int i = 0; i < 2; i++) barriers.add(executor.submit(() -> {
-            ready.countDown();
-            if (!ready.await(30, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("Thumbnail queue timed out");
-            return null;
-        }));
-        for (var barrier : barriers) barrier.get(35, java.util.concurrent.TimeUnit.SECONDS);
-        waitForIdleSync();
+        var executor = (java.util.concurrent.ThreadPoolExecutor) field(activity, "thumbnails");
+        long deadline = android.os.SystemClock.uptimeMillis() + 35000;
+        do {
+            waitForIdleSync();
+            var ready = new java.util.concurrent.CountDownLatch(2);
+            List<java.util.concurrent.Future<?>> barriers = new ArrayList<>();
+            for (int i = 0; i < 2; i++) barriers.add(executor.submit(() -> {
+                ready.countDown();
+                if (!ready.await(30, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("Thumbnail queue timed out");
+                return null;
+            }));
+            for (var barrier : barriers) barrier.get(35, java.util.concurrent.TimeUnit.SECONDS);
+            waitForIdleSync();
+            if (executor.getActiveCount() == 0 && executor.getQueue().isEmpty()) return;
+        } while (android.os.SystemClock.uptimeMillis() < deadline);
+        throw new AssertionError("Thumbnail updates did not settle");
     }
 
     private void verifySettingsResources(Context context) {
@@ -2787,26 +3175,26 @@ public final class DeviceTests extends Instrumentation {
             runOnMainChecked(() -> {
                 setField(activity, "draft", isolated);
                 build.invoke(activity);
-                android.widget.Button button = activity.getWindow().getDecorView().findViewWithTag("filters");
+                android.view.View decor = activity.getWindow().getDecorView();
+                decor.findViewWithTag("editor-tab-1").performClick();
+                android.widget.Button button = decor.findViewWithTag("style-tab-3");
                 check(button != null && button.getText().toString().equals(activity.getString(R.string.filters)),
-                        "Icon parameters show the filters button");
+                        "Filters have a dedicated Style tab");
                 button.performClick();
             });
             waitForThumbnails(activity);
             runOnMainChecked(() -> {
-                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
-                android.view.View decor = dialog.getWindow().getDecorView();
-                check(decor.findViewWithTag("filter-example-0") != null && decor.findViewWithTag("filter-example-5") != null,
-                        "Filters show six preview icons");
+                android.view.View decor = activity.getWindow().getDecorView();
+                check(((android.widget.ImageView) field(activity, "stylePreview")).getDrawable() != null,
+                        "Filters use the common pinned preview");
                 decor.findViewWithTag("filter-add").performClick();
                 android.app.AlertDialog chooser = (android.app.AlertDialog) field(activity, "filterTypeDialog");
                 chooser.getListView().performItemClick(null, 0, 0);
             });
             waitForThumbnails(activity);
             runOnMainChecked(() -> {
-                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
-                android.view.View decor = dialog.getWindow().getDecorView();
-                android.widget.ImageView example = decor.findViewWithTag("filter-example-0");
+                android.view.View decor = activity.getWindow().getDecorView();
+                android.widget.ImageView example = (android.widget.ImageView) field(activity, "stylePreview");
                 check(example.getDrawable() != null, "Filter preview renders a system icon");
                 Bitmap before = ((android.graphics.drawable.BitmapDrawable) example.getDrawable()).getBitmap()
                         .copy(Bitmap.Config.ARGB_8888, false);
@@ -2821,9 +3209,8 @@ public final class DeviceTests extends Instrumentation {
             });
             waitForThumbnails(activity);
             runOnMainChecked(() -> {
-                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
-                android.view.View decor = dialog.getWindow().getDecorView();
-                android.widget.ImageView example = decor.findViewWithTag("filter-example-0");
+                android.view.View decor = activity.getWindow().getDecorView();
+                android.widget.ImageView example = (android.widget.ImageView) field(activity, "stylePreview");
                 try { check(!previewBefore.sameAs(((android.graphics.drawable.BitmapDrawable) example.getDrawable()).getBitmap()),
                         "Changing a filter updates the preview"); }
                 finally { previewBefore.recycle(); previewBefore = null; }
@@ -2836,31 +3223,29 @@ public final class DeviceTests extends Instrumentation {
                         "Moving a filter changes the chain order");
                 decor.findViewWithTag("filter-0-remove").performClick();
                 check(decor.findViewWithTag("filter-1") == null, "Removing a filter updates the list");
-                dialog.dismiss();
-                check(isolated.filters.isEmpty(), "Closing filters without applying discards changes");
-                activity.getWindow().getDecorView().findViewWithTag("filters").performClick();
-                decor = ((android.app.Dialog) field(activity, "filtersDialog")).getWindow().getDecorView();
+                check(isolated.filters.size() == 1
+                                && ((IconFilters.ColorCorrection) Draft.load(activity).filters.get(0)).values[2] == -100,
+                        "Reordering, removal and slider edits save without confirmation");
+                decor.findViewWithTag("filter-0-remove").performClick();
+                check(isolated.filters.isEmpty() && Draft.load(activity).filters.isEmpty(),
+                        "Removing the last filter saves an empty chain");
                 decor.findViewWithTag("filter-add").performClick();
                 ((android.app.AlertDialog) field(activity, "filterTypeDialog")).getListView().performItemClick(null, 0, 0);
                 android.widget.SeekBar contrast = decor.findViewWithTag("filter-0-contrast");
                 contrast.setProgress(29);
                 contrast.onKeyDown(android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
                         new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_RIGHT));
-                android.app.Dialog applied = (android.app.Dialog) field(activity, "filtersDialog");
-                decor.findViewWithTag("filters-apply").performClick();
                 check(isolated.filters.size() == 1 && Draft.load(activity).filters.size() == 1
-                                && ((IconFilters.ColorCorrection) isolated.filters.get(0)).values[1] == 30
-                                && !applied.isShowing(),
-                        "Applying filters saves the chain");
-                check(((android.widget.Button) activity.getWindow().getDecorView().findViewWithTag("filters")).getText()
-                                .toString().equals(activity.getString(R.string.filters_count, 1)),
-                        "Filters button shows the filter count");
+                                && ((IconFilters.ColorCorrection) isolated.filters.get(0)).values[1] == 30,
+                        "Editing filters saves the chain immediately");
+                decor.findViewWithTag("style-tab-2").performClick();
+                decor.findViewWithTag("style-tab-3").performClick();
+                check(((android.widget.SeekBar) decor.findViewWithTag("filter-0-contrast")).getProgress() == 30,
+                        "Switching tabs preserves the filter controls");
             });
             waitForThumbnails(activity);
         } finally {
             runOnMainChecked(() -> {
-                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
-                if (dialog != null) dialog.dismiss();
                 setField(activity, "draft", original);
                 original.save(activity); build.invoke(activity);
             });
@@ -2901,12 +3286,12 @@ public final class DeviceTests extends Instrumentation {
             runOnMainChecked(() -> {
                 setField(activity, "draft", isolated);
                 build.invoke(activity);
-                activity.getWindow().getDecorView().findViewWithTag("filters").performClick();
+                activity.getWindow().getDecorView().findViewWithTag("editor-tab-1").performClick();
+                activity.getWindow().getDecorView().findViewWithTag("style-tab-3").performClick();
             });
             waitForThumbnails(activity);
             runOnMainChecked(() -> {
-                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
-                android.view.View decor = dialog.getWindow().getDecorView();
+                android.view.View decor = activity.getWindow().getDecorView();
                 decor.findViewWithTag("filter-add").performClick();
                 android.app.AlertDialog chooser = (android.app.AlertDialog) field(activity, "filterTypeDialog");
                 check(chooser.getListView().getCount() == 2, "Filter menu offers color and position");
@@ -2914,8 +3299,7 @@ public final class DeviceTests extends Instrumentation {
             });
             waitForThumbnails(activity);
             runOnMainChecked(() -> {
-                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
-                android.view.View decor = dialog.getWindow().getDecorView();
+                android.view.View decor = activity.getWindow().getDecorView();
                 String[] fields = {"scale", "offsetX", "offsetY", "skewX", "skewY"};
                 for (int i = 0; i < fields.length; i++) {
                     android.widget.SeekBar slider = decor.findViewWithTag("filter-0-" + fields[i]);
@@ -2927,7 +3311,7 @@ public final class DeviceTests extends Instrumentation {
                     check(slider.getContentDescription().toString().contains(unit),
                             "Position slider announces its unit: " + fields[i]);
                 }
-                android.widget.ImageView example = decor.findViewWithTag("filter-example-0");
+                android.widget.ImageView example = (android.widget.ImageView) field(activity, "stylePreview");
                 check(example.getDrawable() instanceof android.graphics.drawable.BitmapDrawable,
                         "Position editor displays a system icon");
                 before[0] = ((android.graphics.drawable.BitmapDrawable) example.getDrawable()).getBitmap()
@@ -2940,9 +3324,8 @@ public final class DeviceTests extends Instrumentation {
             });
             waitForThumbnails(activity);
             runOnMainChecked(() -> {
-                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
-                android.view.View decor = dialog.getWindow().getDecorView();
-                android.widget.ImageView example = decor.findViewWithTag("filter-example-0");
+                android.view.View decor = activity.getWindow().getDecorView();
+                android.widget.ImageView example = (android.widget.ImageView) field(activity, "stylePreview");
                 check(!before[0].sameAs(((android.graphics.drawable.BitmapDrawable) example.getDrawable()).getBitmap()),
                         "Position controls update the pinned preview");
                 before[0].recycle();
@@ -2953,29 +3336,25 @@ public final class DeviceTests extends Instrumentation {
                 check(((android.widget.SeekBar) decor.findViewWithTag("filter-1-offsetX")).getProgress() == 20
                                 && ((android.widget.SeekBar) decor.findViewWithTag("filter-1-skewY")).getProgress() == -15,
                         "Moving position after color preserves all settings");
-                decor.findViewWithTag("filters-apply").performClick();
                 check(isolated.filters.size() == 2 && isolated.filters.get(0) instanceof IconFilters.ColorCorrection
                                 && isolated.filters.get(1) instanceof IconFilters.Position
                                 && java.util.Arrays.equals(((IconFilters.Position) isolated.filters.get(1)).values,
                                         new int[]{75, 20, -10, 15, -15})
                                 && IconFilters.key(Draft.load(activity).filters).equals(IconFilters.key(isolated.filters)),
-                        "Applying saves the mixed filter order and position settings");
-                activity.getWindow().getDecorView().findViewWithTag("filters").performClick();
-                android.app.Dialog reopened = (android.app.Dialog) field(activity, "filtersDialog");
-                android.view.View reopenedDecor = reopened.getWindow().getDecorView();
+                        "Editing saves the mixed filter order and position settings");
+                build.invoke(activity);
+                android.view.View reopenedDecor = activity.getWindow().getDecorView();
                 check(((android.widget.SeekBar) reopenedDecor.findViewWithTag("filter-1-scale")).getProgress() == 75
                                 && ((android.widget.SeekBar) reopenedDecor.findViewWithTag("filter-1-offsetY")).getProgress() == -10,
-                        "Reopening restores the position controls");
+                        "Rebuilding the editor restores the position controls");
                 stepPositionSlider(reopenedDecor, "filter-1-scale", 76);
-                reopened.dismiss();
-                check(((IconFilters.Position) isolated.filters.get(1)).values[0] == 75,
-                        "Closing without applying discards position changes");
+                reopenedDecor.findViewWithTag("style-tab-2").performClick();
+                check(((IconFilters.Position) Draft.load(activity).filters.get(1)).values[0] == 76,
+                        "Leaving Filters retains position changes without an Apply action");
             });
             waitForThumbnails(activity);
         } finally {
             runOnMainChecked(() -> {
-                android.app.Dialog dialog = (android.app.Dialog) field(activity, "filtersDialog");
-                if (dialog != null) dialog.dismiss();
                 setField(activity, "draft", original);
                 original.save(activity);
                 build.invoke(activity);
@@ -3501,11 +3880,12 @@ public final class DeviceTests extends Instrumentation {
                         "Folder background toggle reflects persisted setting");
                 android.widget.Button shapePicker = (android.widget.Button) field(activity, "shapeButton");
                 android.widget.ImageView styleImage = (android.widget.ImageView) field(activity, "stylePreview");
-                check(styleImage.getScaleType() == android.widget.ImageView.ScaleType.FIT_CENTER
+                check(styleImage.getScaleType() == android.widget.ImageView.ScaleType.CENTER_CROP
                                 && styleImage.getTag() != null,
-                        "Universal style preview is attached to the editor");
-                check(shapePicker != null && shapePicker.getText().toString().contains(activity.getString(shown.shape.label)),
-                        "Shape picker button shows the currently saved shape");
+                        "Universal style preview fills the editor stage");
+                check(shapePicker != null && shapePicker.getParent() == null
+                                && root.findViewWithTag("style-shape-presets") != null,
+                        "Shape selection uses the inline illustrated tabs, not a separate button");
                 check(findShapePicker(activity.getWindow().getDecorView()) == null,
                         "Shape selection no longer uses a stock dropdown");
                 check(findText(activity.getWindow().getDecorView(), "Выбрать образец .hnt") == null,
@@ -3844,7 +4224,6 @@ public final class DeviceTests extends Instrumentation {
     }
 
     private int progressCount(android.view.View view) {
-        if ("style-preview-loading".equals(view.getTag())) return 0;
         int count = view instanceof android.widget.ProgressBar progress && progress.isIndeterminate() ? 1 : 0;
         if (view instanceof android.view.ViewGroup group) {
             for (int i = 0; i < group.getChildCount(); i++) count += progressCount(group.getChildAt(i));
@@ -4906,6 +5285,9 @@ public final class DeviceTests extends Instrumentation {
         Map<String, String> installed = ThemeEngine.exportTargets(List.of(a, b, c, none), combined, Map.of(), false);
         check(installed.equals(Map.of("dev.app.a", "dev.pack.one:" + names.get(0), "dev.app.b", "dev.pack.five:" + names.get(4),
                 "dev.app.c", "dev.pack.two:" + names.get(2))), "Installed-only export resolves each app by pack priority");
+        ThemeEngine.ExportPlan plan = ThemeEngine.exportPlan(List.of(a, b, c, none), combined, Map.of(), false);
+        check(plan.targets().equals(installed) && plan.count() == 3,
+                "Combined export reuses pack selection results for targets and count");
         Map<String, String> manual = Map.of(a.key(), "dev.pack.five:" + names.get(3));
         check(("dev.pack.five:" + names.get(3)).equals(combined.selected(a, manual)), "Manual choice overrides pack priority");
         Bitmap expected = real.render(names.get(4), 64), actual = combined.render(combined.automatic(b), 64);
@@ -4920,8 +5302,10 @@ public final class DeviceTests extends Instrumentation {
             syntheticMapping(same, real, "dev.shared.app" + i + "/.Main", names.get(100 + i));
         }
         IconRepository.Pack union = IconRepository.combine(List.of(first, disjoint));
+        ThemeEngine.ExportPlan unionPlan = ThemeEngine.exportPlan(List.of(), union, Map.of(), true);
         check(ThemeEngine.exportCount(List.of(), union, Map.of(), true) == 200
-                        && ThemeEngine.exportTargets(List.of(), union, Map.of(), true).size() == 200,
+                        && ThemeEngine.exportTargets(List.of(), union, Map.of(), true).size() == 200
+                        && unionPlan.count() == 200 && unionPlan.targets().size() == 200,
                 "Whole-pack export of two disjoint 100-icon packs contains 200 icons");
         IconRepository.Pack overlap = IconRepository.combine(List.of(first, same));
         Map<String, String> overlapTargets = ThemeEngine.exportTargets(List.of(), overlap, Map.of(), true);
