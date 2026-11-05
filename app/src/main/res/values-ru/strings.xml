@@ -175,6 +175,7 @@
     <string name="no_destination">Доступ к Honor/Themes ещё не предоставлен</string>
     <string name="export">Создать тему</string>
     <string name="loading">Загрузка…</string>
+    <string name="adding_pack">Добавление иконпака…</string>
     <string name="loading_template">Загрузка шаблона…</string>
     <string name="saving_theme">Создание и сохранение темы…</string>
     <string name="ready">Черновик сохраняется автоматически</string>

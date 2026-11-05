@@ -10,6 +10,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
@@ -65,12 +66,27 @@ public final class DeviceTests extends Instrumentation {
         finish(resultCode, result);
     }
 
+    private void verifyPackDiscoveryStopsAtFirstMatch() throws Exception {
+        StringBuilder xml = new StringBuilder("<appfilter>");
+        for (int i = 0; i < 5000; i++) xml.append("<item/>");
+        xml.append("</appfilter>");
+        org.xmlpull.v1.XmlPullParser parser = android.util.Xml.newPullParser();
+        parser.setInput(new StringReader(xml.toString()));
+        int[] visited = {0};
+        IconRepository.readTags(parser, ignored -> visited[0]++, () -> visited[0] == 2);
+        check(visited[0] == 2, "Pack discovery stops parsing appfilter after its first matching entry");
+    }
+
     private void runChecks() throws Exception {
         Context context = getTargetContext();
         if ("true".equals(arguments.getString("pngOnly"))) {
             verifyPngEncoding(context);
             String pngPack = arguments.getString("pngPack");
             if (pngPack != null && !pngPack.isBlank()) verifyPackPngEncoding(context, pngPack);
+            return;
+        }
+        if ("true".equals(arguments.getString("packDiscoveryOnly"))) {
+        verifyPackDiscoveryStopsAtFirstMatch();
             return;
         }
         if ("true".equals(arguments.getString("perPackResolutionUiOnly"))) {

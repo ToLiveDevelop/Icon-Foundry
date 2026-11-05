@@ -2085,7 +2085,7 @@ public final class MainActivity extends Activity {
                 Runnable load = () -> {
                     enabled(layout.getChildAt(0), false);
                     dialog.setCancelable(false);
-                    Runnable stop = packSkeleton(content);
+                    Runnable stop = packSkeleton(content, R.string.adding_pack);
                     dialog.setOnDismissListener(ignored -> {
                         stop.run();
                         if (packDialog == dialog) packDialog = null;
@@ -2253,13 +2253,17 @@ public final class MainActivity extends Activity {
     }
 
     private Runnable packSkeleton(LinearLayout content) {
+        return packSkeleton(content, R.string.loading);
+    }
+
+    private Runnable packSkeleton(LinearLayout content, int message) {
         content.removeAllViews();
         LinearLayout loading = row();
         ProgressBar spinner = new ProgressBar(this);
         spinner.setIndeterminate(true);
         spinner.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(ACCENT));
         loading.addView(spinner, new LinearLayout.LayoutParams(dp(32), dp(32)));
-        TextView label = text(getString(R.string.loading), 16, MUTED);
+        TextView label = text(getString(message), 16, MUTED);
         label.setPadding(dp(12), dp(8), 0, dp(8));
         loading.addView(label);
         content.addView(loading);

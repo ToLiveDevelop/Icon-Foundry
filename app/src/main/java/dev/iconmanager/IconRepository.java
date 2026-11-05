@@ -417,7 +417,7 @@ final class IconRepository {
             try {
                 if (!hasXml(resources, packageName, "appfilter")) continue;
                 boolean[] mapped = {false};
-                parse(resources, packageName, "appfilter", parser -> {
+                parseUntilUsable(resources, packageName, "appfilter", parser -> {
                     if (mapped[0]) return;
                     String tag = parser.getName();
                     if ((!tag.equals("item") && !tag.equals("calendar"))
@@ -428,7 +428,7 @@ final class IconRepository {
                     if (tag.equals("calendar")) name += Calendar.getInstance().get(Calendar.DAY_OF_MONTH);
                     mapped[0] = safeName(name) && (resources.getIdentifier(name, "drawable", packageName) != 0
                             || resources.getIdentifier(name, "mipmap", packageName) != 0);
-                }, () -> {}, () -> mapped[0]);
+                }, () -> mapped[0]);
                 if (!mapped[0]) continue;
                 String label = pm.getApplicationLabel(pm.getApplicationInfo(packageName, 0)).toString();
                 result.add(new PackInfo(packageName, label, badge(packageName)));
@@ -551,6 +551,19 @@ final class IconRepository {
     private static void parse(Resources resources, String packageName, String name, TagReader reader,
                               Runnable betweenSources, java.util.function.BooleanSupplier usable)
             throws IOException, XmlPullParserException {
+        parse(resources, packageName, name, reader, betweenSources, usable, false);
+    }
+
+    private static void parseUntilUsable(Resources resources, String packageName, String name, TagReader reader,
+                                         java.util.function.BooleanSupplier usable)
+            throws IOException, XmlPullParserException {
+        parse(resources, packageName, name, reader, () -> {}, usable, true);
+    }
+
+    private static void parse(Resources resources, String packageName, String name, TagReader reader,
+                              Runnable betweenSources, java.util.function.BooleanSupplier usable,
+                              boolean stopWhenUsable)
+            throws IOException, XmlPullParserException {
         boolean asset = false;
         for (String file : resources.getAssets().list("")) {
             if (file.equals(name + ".xml")) asset = true;
@@ -559,7 +572,8 @@ final class IconRepository {
         if (id == 0 && !asset) throw new IOException(dev.iconmanager.App.text(R.string.xml_missing_prefix) + name + dev.iconmanager.App.text(R.string.xml_missing_in) + packageName);
         if (id != 0) {
             try (XmlResourceParser parser = resources.getXml(id)) {
-                readTags(parser, reader);
+                if (stopWhenUsable) readTags(parser, reader, usable);
+                else readTags(parser, reader);
             }
             if (usable.getAsBoolean()) return;
         }
@@ -568,15 +582,24 @@ final class IconRepository {
             try (InputStream input = resources.getAssets().open(name + ".xml")) {
                 XmlPullParser parser = Xml.newPullParser();
                 parser.setInput(input, "UTF-8");
-                readTags(parser, reader);
+                if (stopWhenUsable) readTags(parser, reader, usable);
+                else readTags(parser, reader);
             }
         }
     }
 
     private static void readTags(XmlPullParser parser, TagReader reader)
             throws IOException, XmlPullParserException {
+        readTags(parser, reader, () -> false);
+    }
+
+    static void readTags(XmlPullParser parser, TagReader reader, java.util.function.BooleanSupplier stop)
+            throws IOException, XmlPullParserException {
         for (int event = parser.getEventType(); event != XmlPullParser.END_DOCUMENT; event = parser.next()) {
-            if (event == XmlPullParser.START_TAG) reader.read(parser);
+            if (event == XmlPullParser.START_TAG) {
+                reader.read(parser);
+                if (stop.getAsBoolean()) return;
+            }
         }
     }
 }
