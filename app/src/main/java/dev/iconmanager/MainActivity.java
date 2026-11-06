@@ -32,6 +32,7 @@ import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.GridLayout;
 import android.widget.GridView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -87,6 +88,7 @@ public final class MainActivity extends Activity {
     private Dialog iconDialog;
     private AlertDialog exportDialog, errorDialog, deleteDialog, exportSizeDialog;
     private Dialog progressDialog;
+    private Dialog themePreviewDialog;
     private TextView progressMessage;
     private String pendingIconApp;
     private Runnable pendingIconChanged;
@@ -595,6 +597,12 @@ public final class MainActivity extends Activity {
         heading.setMinHeight(dp(64));
         heading.setGravity(Gravity.CENTER_VERTICAL);
         header.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
+        android.widget.ImageButton preview = iconButton(R.drawable.ic_visibility, R.string.theme_preview,
+                view -> showThemePreview());
+        preview.setTag("theme-preview-button");
+        LinearLayout.LayoutParams previewParams = new LinearLayout.LayoutParams(dp(48), dp(48));
+        previewParams.setMarginEnd(dp(8));
+        header.addView(preview, previewParams);
         Button reset = button(R.string.templates, view -> { saveDraft(); showTemplates(); });
         header.addView(reset, new LinearLayout.LayoutParams(-2, -2));
         LinearLayout.LayoutParams settingsParams = new LinearLayout.LayoutParams(dp(48), dp(48));
@@ -795,6 +803,200 @@ public final class MainActivity extends Activity {
         addEditorTabs();
         showEditorTab(editorTab);
         refresh();
+    }
+
+    private void showThemePreview() {
+        Dialog dialog = fullDialog();
+        themePreviewDialog = dialog;
+
+        FrameLayout scene = new FrameLayout(this);
+        scene.setTag("theme-preview-scene");
+        scene.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{0xFF344C79, 0xFF294C54, 0xFF182638}));
+        ImageView wallpaper = new ImageView(this);
+        wallpaper.setTag(draft.wallpaperPath);
+        wallpaper.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        wallpaper.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        scene.addView(wallpaper, new FrameLayout.LayoutParams(-1, -1));
+
+        LinearLayout content = column();
+        content.setPadding(dp(16), dp(12), dp(16), dp(12));
+        scene.addView(content, new FrameLayout.LayoutParams(-1, -1));
+
+        LinearLayout header = row();
+        header.setTag("theme-preview-header");
+        header.setPadding(dp(12), 0, dp(12), 0);
+        header.setBackground(rounded(0x66000000, 16));
+        TextView heading = text(getString(R.string.theme_preview), 22, Color.WHITE);
+        heading.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        heading.setGravity(Gravity.CENTER_VERTICAL);
+        header.addView(heading, new LinearLayout.LayoutParams(-1, dp(56)));
+        content.addView(header, new LinearLayout.LayoutParams(-1, -2));
+
+        android.widget.HorizontalScrollView pagesScroll = new android.widget.HorizontalScrollView(this);
+        pagesScroll.setTag("theme-preview-scroll");
+        pagesScroll.setFillViewport(true);
+        pagesScroll.setHorizontalScrollBarEnabled(false);
+        pagesScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        LinearLayout pages = row();
+        pages.setGravity(Gravity.TOP);
+        pagesScroll.addView(pages, new android.widget.HorizontalScrollView.LayoutParams(-2, -1));
+        LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(-1, 0, 1);
+        scrollParams.topMargin = dp(8);
+        scrollParams.bottomMargin = dp(8);
+        content.addView(pagesScroll, scrollParams);
+
+        List<IconRepository.App> previewApps = new ArrayList<>(apps);
+        java.util.Set<String> known = new java.util.HashSet<>();
+        for (IconRepository.App app : apps) known.add(app.key());
+        for (String key : draft.overrides.keySet()) {
+            if (known.contains(key)) continue;
+            var component = IconRepository.component(key);
+            if (component != null) previewApps.add(new IconRepository.App(component,
+                    getString(R.string.not_installed_app, component.getPackageName())));
+        }
+        var collator = java.text.Collator.getInstance(getResources().getConfiguration().getLocales().get(0));
+        previewApps.sort(java.util.Comparator.comparing(IconRepository.App::label, collator)
+                .thenComparing(IconRepository.App::key));
+        int pageCount = Math.max(1, (previewApps.size() + 29) / 30);
+        List<GridLayout> grids = new ArrayList<>(pageCount);
+        for (int pageIndex = 0; pageIndex < pageCount; pageIndex++) {
+            GridLayout grid = new GridLayout(this);
+            grid.setTag("theme-preview-page-" + pageIndex);
+            grid.setColumnCount(5);
+            grid.setRowCount(6);
+            grid.setUseDefaultMargins(false);
+            grid.setAlignmentMode(GridLayout.ALIGN_BOUNDS);
+            for (int cellIndex = 0; cellIndex < 30; cellIndex++) {
+                int appIndex = pageIndex * 30 + cellIndex;
+                IconRepository.App app = appIndex < previewApps.size() ? previewApps.get(appIndex) : null;
+                LinearLayout tile = column();
+                tile.setTag(app == null ? "theme-preview-tile-" + appIndex : "theme-preview-app-" + app.key());
+                tile.setGravity(Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+                ImageView icon = new ImageView(this);
+                icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                icon.setContentDescription(app == null ? null : app.label());
+                tile.addView(icon, new LinearLayout.LayoutParams(dp(44), dp(44)));
+                TextView label = text(app == null ? "" : app.label(), 9, Color.WHITE);
+                label.setPadding(0, 0, 0, 0);
+                label.setGravity(Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+                label.setMaxLines(2);
+                label.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                label.setShadowLayer(dp(3), 0, dp(1), Color.BLACK);
+                tile.addView(label, new LinearLayout.LayoutParams(-1, dp(34)));
+                if (app == null) tile.setVisibility(View.INVISIBLE);
+                GridLayout.LayoutParams cell = new GridLayout.LayoutParams(
+                        GridLayout.spec(cellIndex / 5, 1, 1f), GridLayout.spec(cellIndex % 5, 1, 1f));
+                cell.width = 0;
+                cell.height = 0;
+                grid.addView(tile, cell);
+            }
+            grid.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+                int iconSize = Math.max(dp(18), Math.min(dp(48),
+                        Math.min(grid.getWidth() / 5 - dp(8), grid.getHeight() / 6 - dp(34))));
+                for (int i = 0; i < grid.getChildCount(); i++) {
+                    View child = ((ViewGroup) grid.getChildAt(i)).getChildAt(0);
+                    ViewGroup.LayoutParams params = child.getLayoutParams();
+                    if (params.width != iconSize || params.height != iconSize) {
+                        params.width = iconSize;
+                        params.height = iconSize;
+                        child.setLayoutParams(params);
+                    }
+                }
+            });
+            LinearLayout.LayoutParams pageParams = new LinearLayout.LayoutParams(-1, -1);
+            pages.addView(grid, pageParams);
+            grids.add(grid);
+        }
+        pagesScroll.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+            int width = pagesScroll.getWidth();
+            if (width <= 0) return;
+            for (int i = 0; i < pages.getChildCount(); i++) {
+                View page = pages.getChildAt(i);
+                ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) page.getLayoutParams();
+                if (params.width != width) {
+                    params.width = width;
+                    page.setLayoutParams(params);
+                }
+            }
+        });
+
+        Button close = button(R.string.close, view -> dialog.dismiss());
+        close.setTag("theme-preview-close");
+        close.setTextColor(Color.BLACK);
+        close.setBackground(buttonSurface(ACCENT, 24));
+        close.setMinHeight(dp(52));
+        content.addView(close, new LinearLayout.LayoutParams(-1, -2));
+
+        String wallpaperPath = draft.wallpaperPath;
+        if (!wallpaperPath.isEmpty()) {
+            thumbnails.execute(() -> {
+                Bitmap image;
+                try {
+                    File file = new File(getFilesDir(), wallpaperPath);
+                    BitmapFactory.Options bounds = new BitmapFactory.Options();
+                    bounds.inJustDecodeBounds = true;
+                    BitmapFactory.decodeFile(file.getPath(), bounds);
+                    if (bounds.outWidth < 1 || bounds.outHeight < 1)
+                        throw new IOException(getString(R.string.wallpaper_read_error));
+                    BitmapFactory.Options options = new BitmapFactory.Options();
+                    options.inSampleSize = 1;
+                    while (Math.max(bounds.outWidth, bounds.outHeight) / options.inSampleSize
+                            > ShapePreview.WIDTH * 2) options.inSampleSize *= 2;
+                    image = BitmapFactory.decodeFile(file.getPath(), options);
+                    if (image == null) throw new IOException(getString(R.string.wallpaper_read_error));
+                } catch (IOException | RuntimeException error) {
+                    Log.e("IconManager", "Theme preview wallpaper failed", error);
+                    runOnUiThread(() -> {
+                        if (!isDestroyed() && themePreviewDialog == dialog) showError(error);
+                    });
+                    return;
+                }
+                runOnUiThread(() -> {
+                    if (!isDestroyed() && themePreviewDialog == dialog && wallpaperPath.equals(wallpaper.getTag())) {
+                        wallpaper.setImageBitmap(image);
+                    } else image.recycle();
+                });
+            });
+        }
+
+        java.util.Set<Integer> boundPages = new java.util.HashSet<>();
+        Runnable bindVisiblePages = () -> {
+            int width = pagesScroll.getWidth();
+            if (width <= 0) return;
+            int first = Math.max(0, pagesScroll.getScrollX() / width);
+            int last = Math.min(grids.size() - 1, (pagesScroll.getScrollX() + width - 1) / width);
+            for (int page = first; page <= last; page++) {
+                if (!boundPages.add(page)) continue;
+                GridLayout grid = grids.get(page);
+                for (int i = 0; i < grid.getChildCount(); i++) {
+                    ViewGroup tile = (ViewGroup) grid.getChildAt(i);
+                    if (tile.getVisibility() != View.VISIBLE) continue;
+                    IconRepository.App app = previewApps.get(page * 30 + i);
+                    ImageView icon = (ImageView) tile.getChildAt(0);
+                    String selected = pack == null ? draft.overrides.get(app.key()) : pack.selected(app, draft.overrides);
+                    if (selected != null && pack != null) bindImage(icon, selected);
+                    else bindSystemImage(icon, app);
+                }
+            }
+        };
+        pagesScroll.setOnScrollChangeListener((View view, int scrollX, int scrollY, int oldScrollX, int oldScrollY) ->
+                bindVisiblePages.run());
+        pagesScroll.post(bindVisiblePages);
+
+        dialog.setContentView(scene);
+        dialog.setOnDismissListener(ignored -> {
+            if (themePreviewDialog == dialog) themePreviewDialog = null;
+            if (wallpaper.getDrawable() instanceof android.graphics.drawable.BitmapDrawable bitmap)
+                bitmap.getBitmap().recycle();
+            wallpaper.setImageDrawable(null);
+            for (GridLayout grid : grids) for (int i = 0; i < grid.getChildCount(); i++) {
+                ImageView icon = (ImageView) ((ViewGroup) grid.getChildAt(i)).getChildAt(0);
+                icon.setTag(null);
+                icon.setImageDrawable(null);
+            }
+        });
+        showFull(dialog);
     }
 
     private LinearLayout editorPage(FrameLayout parent) {
@@ -3347,6 +3549,7 @@ public final class MainActivity extends Activity {
         if (errorDialog != null) errorDialog.dismiss();
         if (deleteDialog != null) deleteDialog.dismiss();
         if (progressDialog != null) progressDialog.dismiss();
+        if (themePreviewDialog != null) themePreviewDialog.dismiss();
         if (fileIconDialog != null) fileIconDialog.dismiss();
         if (helpDialog != null) helpDialog.dismiss();
         if (settingsDialog != null) settingsDialog.dismiss();

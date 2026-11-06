@@ -63,6 +63,7 @@
     <string name="tab_export">Export</string>
     <string name="new_theme">New theme</string>
     <string name="templates">Templates</string>
+    <string name="theme_preview">Theme preview</string>
     <string name="delete_template">Delete</string>
     <string name="delete_template_title">Delete template?</string>
     <string name="delete_template_named">Delete template %1$s</string>

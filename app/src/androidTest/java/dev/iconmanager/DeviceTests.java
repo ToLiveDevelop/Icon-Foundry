@@ -79,6 +79,10 @@ public final class DeviceTests extends Instrumentation {
 
     private void runChecks() throws Exception {
         Context context = getTargetContext();
+        if ("true".equals(arguments.getString("themePreviewUiOnly"))) {
+            verifyThemePreviewUiOnly(context);
+            return;
+        }
         if ("true".equals(arguments.getString("pngOnly"))) {
             verifyPngEncoding(context);
             String pngPack = arguments.getString("pngPack");
@@ -832,6 +836,120 @@ public final class DeviceTests extends Instrumentation {
                 check(preview.isShown(), "Style preview remains visible on inner tab " + i);
             }
         });
+        verifyThemePreviewUi(activity);
+    }
+
+    private void verifyThemePreviewUi(MainActivity activity) throws Exception {
+        Draft draft = (Draft) field(activity, "draft");
+        String originalWallpaper = draft.wallpaperPath;
+        boolean originalSystemIcons = draft.systemIcons;
+        List<?> apps = (List<?>) field(activity, "apps");
+        check(!apps.isEmpty(), "Theme preview has installed apps to render");
+        List<IconRepository.App> sortedApps = new ArrayList<>();
+        for (Object app : apps) sortedApps.add((IconRepository.App) app);
+        var collator = java.text.Collator.getInstance(
+                activity.getResources().getConfiguration().getLocales().get(0));
+        sortedApps.sort(java.util.Comparator.comparing(IconRepository.App::label, collator)
+                .thenComparing(IconRepository.App::key));
+        IconRepository.App fallbackApp = sortedApps.get(0);
+        boolean hadFallbackOverride = draft.overrides.containsKey(fallbackApp.key());
+        String originalFallbackOverride = draft.overrides.get(fallbackApp.key());
+        String previewWallpaper = "theme-preview-test.png";
+        File wallpaperFile = new File(activity.getFilesDir(), previewWallpaper);
+        Bitmap source = Bitmap.createBitmap(48, 72, Bitmap.Config.ARGB_8888);
+        source.eraseColor(Color.MAGENTA);
+        try {
+            try (FileOutputStream output = new FileOutputStream(wallpaperFile)) {
+                check(source.compress(Bitmap.CompressFormat.PNG, 100, output),
+                        "Theme preview wallpaper fixture encoded");
+            }
+            String originalDraft = draft.toJson().toString();
+            runOnMainChecked(() -> {
+                draft.wallpaperPath = previewWallpaper;
+                draft.systemIcons = false;
+                draft.overrides.put(fallbackApp.key(), "");
+                android.widget.LinearLayout header = (android.widget.LinearLayout)
+                        ((android.widget.LinearLayout) field(activity, "root")).getChildAt(0);
+                check(header.getChildAt(1).getTag().equals("theme-preview-button")
+                                && header.getChildAt(2) instanceof android.widget.Button
+                                && ((android.widget.Button) header.getChildAt(2)).getText()
+                                .equals(activity.getString(R.string.templates)),
+                        "Eye preview action sits immediately before Templates");
+                header.getChildAt(1).performClick();
+            });
+            waitForThumbnails(activity);
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "themePreviewDialog");
+                android.view.View decor = dialog.getWindow().getDecorView();
+                check(findText(decor, activity.getString(R.string.theme_preview)) != null
+                                && decor.findViewWithTag("theme-preview-close") instanceof android.widget.Button,
+                        "Preview has a shared heading and Close action");
+                android.widget.GridLayout grid = decor.findViewWithTag("theme-preview-page-0");
+                check(grid != null && grid.getRowCount() == 6 && grid.getColumnCount() == 5
+                                && grid.getChildCount() == 30,
+                        "Theme preview page contains exactly five columns and six rows");
+                int labelHeight = Math.round(34 * activity.getResources().getDisplayMetrics().density);
+                boolean iconsAligned = true;
+                for (int i = 0; i < 5; i++) {
+                    android.view.ViewGroup tile = (android.view.ViewGroup) grid.getChildAt(i);
+                    android.view.View icon = tile.getChildAt(0);
+                    android.view.View label = tile.getChildAt(1);
+                    iconsAligned &= icon.getTop() == 0
+                            && label.getLayoutParams().height == labelHeight
+                            && ((android.widget.TextView) label).getMaxLines() == 2;
+                }
+                check(iconsAligned, "Icon positions remain fixed with a two-line label slot");
+                android.view.ViewGroup fallbackTile = decor.findViewWithTag(
+                        "theme-preview-app-" + fallbackApp.key());
+                android.widget.ImageView fallbackIcon =
+                        fallbackTile == null ? null : (android.widget.ImageView) fallbackTile.getChildAt(0);
+                check(fallbackIcon != null && fallbackIcon.getDrawable()
+                                instanceof android.graphics.drawable.BitmapDrawable,
+                        "Apps without a replacement icon render their styled system icon when system icons are off");
+                android.widget.HorizontalScrollView scroll = decor.findViewWithTag("theme-preview-scroll");
+                android.view.ViewGroup pages = (android.view.ViewGroup) scroll.getChildAt(0);
+                check(scroll.isHorizontalScrollBarEnabled() == false && pages.getChildCount() >= 1
+                                && grid.getWidth() == scroll.getWidth(),
+                        "Theme preview pages use the full horizontal viewport");
+                if (apps.size() > 30) check(pages.getChildCount() > 1
+                                && pages.getWidth() > scroll.getWidth(),
+                        "Apps beyond the first thirty are reachable by horizontal scrolling");
+                android.widget.ImageView wallpaper = decor.findViewWithTag(previewWallpaper);
+                check(wallpaper != null, "Preview retains the wallpaper draft path on its image view");
+                check(wallpaper.getDrawable() instanceof android.graphics.drawable.BitmapDrawable,
+                        "Preview loads its selected wallpaper bitmap");
+                dialog.dismiss();
+                draft.wallpaperPath = originalWallpaper;
+                draft.systemIcons = originalSystemIcons;
+                if (hadFallbackOverride) draft.overrides.put(fallbackApp.key(), originalFallbackOverride);
+                else draft.overrides.remove(fallbackApp.key());
+                check(draft.toJson().toString().equals(originalDraft),
+                        "Opening and closing the preview leaves the draft unchanged");
+            });
+        } finally {
+            runOnMainChecked(() -> {
+                android.app.Dialog dialog = (android.app.Dialog) field(activity, "themePreviewDialog");
+                if (dialog != null && dialog.isShowing()) dialog.dismiss();
+                draft.wallpaperPath = originalWallpaper;
+                draft.systemIcons = originalSystemIcons;
+                if (hadFallbackOverride) draft.overrides.put(fallbackApp.key(), originalFallbackOverride);
+                else draft.overrides.remove(fallbackApp.key());
+            });
+            source.recycle();
+            Files.deleteIfExists(wallpaperFile.toPath());
+        }
+    }
+
+    private void verifyThemePreviewUiOnly(Context context) throws Exception {
+        MainActivity activity = (MainActivity) startActivitySync(new android.content.Intent(context, MainActivity.class)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK));
+        try {
+            runOnMainChecked(activity::openEditor);
+            waitForWork(activity);
+            verifyThemePreviewUi(activity);
+        } finally {
+            runOnMainChecked(activity::finish);
+        }
     }
 
     private void verifyInlineStyleFixture(Context context) throws Exception {
