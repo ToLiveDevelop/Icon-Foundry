@@ -61,6 +61,9 @@
     <string name="tab_style">Стиль</string>
     <string name="tab_apps">Иконки</string>
     <string name="tab_export">Экспорт</string>
+    <string name="statusbar">Статусбар</string>
+    <string name="hide_volte">Скрывать VoLTE</string>
+    <string name="hide_volte_help">Добавляет прозрачную иконку VoLTE в слой статусбара темы HONOR. Значок исчезнет после ручного применения темы в приложении «Темы» HONOR.</string>
     <string name="new_theme">Новая тема</string>
     <string name="templates">Шаблоны</string>
     <string name="theme_preview">Превью темы</string>

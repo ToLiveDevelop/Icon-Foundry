@@ -61,6 +61,9 @@
     <string name="tab_style">Style</string>
     <string name="tab_apps">Icons</string>
     <string name="tab_export">Export</string>
+    <string name="statusbar">Status bar</string>
+    <string name="hide_volte">Hide VoLTE</string>
+    <string name="hide_volte_help">Adds a transparent VoLTE icon to the HONOR status-bar theme layer. This only hides the icon when the exported theme is applied in HONOR Themes.</string>
     <string name="new_theme">New theme</string>
     <string name="templates">Templates</string>
     <string name="theme_preview">Theme preview</string>

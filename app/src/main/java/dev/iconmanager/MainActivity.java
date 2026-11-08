@@ -635,6 +635,16 @@ public final class MainActivity extends Activity {
         packCard.addView(packInfo);
         addPackButton = button(R.string.add_pack, view -> choosePack());
         packCard.addView(addPackButton);
+        LinearLayout statusbarCard = card(baseBody, R.string.statusbar);
+        CheckBox hideVolte = new CheckBox(this);
+        hideVolte.setTag("hide-volte");
+        hideVolte.setText(R.string.hide_volte);
+        hideVolte.setChecked(draft.hideVolte);
+        hideVolte.setOnCheckedChangeListener((view, checked) -> {
+            draft.hideVolte = checked;
+            saveDraft();
+        });
+        statusbarCard.addView(withHelp(hideVolte, getString(R.string.hide_volte), R.string.hide_volte_help));
 
         coverSection = new OptionalSection(baseBody, R.string.cover, !draft.coverPath.isEmpty());
         LinearLayout cover = coverSection.content;
@@ -3223,7 +3233,7 @@ public final class MainActivity extends Activity {
                         cover, tree, null, snapshot.wallpaperPath.isEmpty() ? null
                                 : new File(getFilesDir(), snapshot.wallpaperPath), overlay, snapshot.overlayAll,
                         snapshot.overlayClip, background, snapshot.backgroundAll, snapshot.backgroundClip, shapeMask,
-                        snapshot.iconScale, snapshot.filters, snapshot.exportSizes,
+                        snapshot.iconScale, snapshot.filters, snapshot.exportSizes, snapshot.hideVolte,
                         (done, total) -> {
                             if (done == 1 || done == total || done % 10 == 0) runOnUiThread(() -> {
                                 if (!isDestroyed()) {

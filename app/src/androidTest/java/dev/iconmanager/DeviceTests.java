@@ -77,8 +77,97 @@ public final class DeviceTests extends Instrumentation {
         check(visited[0] == 2, "Pack discovery stops parsing appfilter after its first matching entry");
     }
 
+    private void verifyVoLTE(Context context) throws Exception {
+        IconRepository repository = new IconRepository(context);
+        String packageName = arguments.getString("pack");
+        if (packageName == null || packageName.isBlank()) {
+            packageName = repository.packs().stream().findFirst().orElseThrow().packageName();
+        }
+        IconRepository.Pack pack = repository.load(packageName);
+        String iconName = pack.icons.keySet().iterator().next();
+        IconRepository.App app = new IconRepository.App(
+                new ComponentName("dev.test.volte", "dev.test.volte.Main"), "VoLTE test");
+        List<IconRepository.App> apps = List.of(app);
+        Map<String, String> overrides = Map.of(app.key(), iconName);
+
+        Draft disabled = new Draft();
+        check(!Draft.fromJson(disabled.toJson()).hideVolte
+                        && !Draft.fromJson(new org.json.JSONObject("{}")).hideVolte
+                        && !disabled.toJson().has("hideVolte"),
+                "VoLTE hiding defaults off and preserves legacy template serialization");
+        Draft enabled = new Draft();
+        enabled.hideVolte = true;
+        check(Draft.fromJson(enabled.toJson()).hideVolte, "VoLTE choice round-trips through template settings");
+        enabled.save(context);
+        check(Draft.load(context).hideVolte, "VoLTE choice persists in the editable draft");
+
+        Bitmap cover = ThemeEngine.cover(pack, apps, overrides);
+        File standardFile = null;
+        File hiddenFile = null;
+        try {
+            ThemeEngine.Built standard = ThemeEngine.build(context, "VoLTE off", false, IconShape.NONE, false,
+                    pack, apps, overrides, cover, false, (done, total) -> {});
+            standardFile = standard.file();
+            ThemeEngine.Built hidden = ThemeEngine.build(context, "VoLTE on", false, IconShape.NONE, false,
+                    pack, apps, overrides, cover, true, (done, total) -> {});
+            hiddenFile = hidden.file();
+            verifyVoLTEArchive(standardFile, false);
+            verifyVoLTEArchive(hiddenFile, true);
+        } finally {
+            cover.recycle();
+            if (standardFile != null) Files.deleteIfExists(standardFile.toPath());
+            if (hiddenFile != null) Files.deleteIfExists(hiddenFile.toPath());
+        }
+    }
+
+    private void verifyVoLTEArchive(File file, boolean expected) throws Exception {
+        try (ZipFile archive = new ZipFile(file)) {
+            ZipEntry module = archive.getEntry("com.android.systemui.status");
+            check((module != null) == expected, expected
+                    ? "Enabled VoLTE hiding adds the HONOR status-bar module"
+                    : "Disabled VoLTE hiding adds no status-bar module");
+            check(archive.getEntry("com.android.systemui") == null,
+                    "VoLTE export does not add the unrelated SystemUI theme module");
+            if (!expected) return;
+            java.util.Set<String> remaining = new java.util.HashSet<>(
+                    List.of("res/", "res/drawable-xxhdpi/",
+                            "res/drawable-xxhdpi/ic_statusbar_volte.png",
+                            "res/drawable-xxhdpi/ic_statusbar_volte_dl.png",
+                            "res/drawable-xxhdpi/ic_statusbar_volte_dl_center.png",
+                            "res/drawable-xxhdpi/ic_statusbar_volte_sig_dl.png",
+                            "res/drawable-xxhdpi/ic_statusbar_incall_double_volte.png"));
+            try (ZipInputStream status = new ZipInputStream(archive.getInputStream(module))) {
+                for (ZipEntry entry; (entry = status.getNextEntry()) != null;) {
+                    check(remaining.remove(entry.getName()), "Status-bar module contains only the VoLTE resource path");
+                    if (!entry.getName().endsWith(".png")) continue;
+                    byte[] bytes = status.readAllBytes();
+                    Bitmap icon = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                    if (icon == null) throw new AssertionError("VoLTE placeholder is not a PNG image");
+                    try {
+                        check(icon.getWidth() == 1 && icon.getHeight() == 60,
+                                "VoLTE drawable placeholders are 1px wide");
+                        boolean transparent = true;
+                        for (int y = 0; y < icon.getHeight(); y++) {
+                            for (int x = 0; x < icon.getWidth(); x++) {
+                                transparent &= Color.alpha(icon.getPixel(x, y)) == 0;
+                            }
+                        }
+                        check(transparent, "VoLTE placeholder is fully transparent");
+                    } finally {
+                        icon.recycle();
+                    }
+                }
+            }
+            check(remaining.isEmpty(), "Status-bar module replaces every standard, dual-SIM, and in-call VoLTE drawable");
+        }
+    }
+
     private void runChecks() throws Exception {
         Context context = getTargetContext();
+        if ("true".equals(arguments.getString("volteOnly"))) {
+            verifyVoLTE(context);
+            return;
+        }
         if ("true".equals(arguments.getString("themePreviewUiOnly"))) {
             verifyThemePreviewUiOnly(context);
             return;
@@ -4620,6 +4709,7 @@ public final class DeviceTests extends Instrumentation {
                 settings.shape = IconShape.SQUIRCLE;
                 settings.fullPack = true;
                 settings.clearFolderBackground = false;
+                settings.hideVolte = true;
                 settings.coverPath = coverFile.getName();
                 settings.overrides.putAll(overrides);
                 settings.overrides.put("dev.test.excluded/dev.test.excluded.Main", "");
@@ -4634,7 +4724,8 @@ public final class DeviceTests extends Instrumentation {
                 Draft restored = store.open(first.id());
                 check(restored.title.equals("My mixed theme") && !restored.toJson().has("filename")
                         && restored.packs.equals(List.of(pack.packageName)) && restored.tree.equals("content://test/tree")
-                        && restored.shape == IconShape.SQUIRCLE && restored.fullPack && !restored.clearFolderBackground,
+                        && restored.shape == IconShape.SQUIRCLE && restored.fullPack && !restored.clearFolderBackground
+                        && restored.hideVolte,
                         "All main template settings round-trip independently from the editing draft");
                 check(restored.overrides.equals(settings.overrides), "Template restores external references and system exclusions");
                 check(java.util.Arrays.equals(coverBytes, Files.readAllBytes(restoredCover.toPath())),

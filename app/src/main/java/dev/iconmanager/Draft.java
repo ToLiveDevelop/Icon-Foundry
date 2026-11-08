@@ -21,6 +21,7 @@ final class Draft {
     boolean fullPack;
     boolean clearFolderBackground = true;
     boolean systemIcons;
+    boolean hideVolte;
     String overlay = "";
     boolean overlayAll;
     int overlayScale = 100;
@@ -66,6 +67,7 @@ final class Draft {
         d.fullPack = j.optBoolean("fullPack");
         d.clearFolderBackground = j.optBoolean("clearFolderBackground", true);
         d.systemIcons = j.optBoolean("systemIcons");
+        d.hideVolte = j.optBoolean("hideVolte");
         d.overlay = j.optString("overlay");
         if (!d.overlay.isEmpty() && !FileIcons.isFile(d.overlay)) throw new JSONException(App.text(R.string.overlay_invalid));
         d.overlayAll = j.optBoolean("overlayAll");
@@ -142,7 +144,8 @@ final class Draft {
 
     boolean hasUnsavedChanges(Context context) {
         if (packs.isEmpty() && title.isEmpty() && overrides.isEmpty() && coverPath.isEmpty()
-                && wallpaperPath.isEmpty() && overlay.isEmpty() && background.isEmpty() && shapeFile.isEmpty()) {
+                && wallpaperPath.isEmpty() && overlay.isEmpty() && background.isEmpty() && shapeFile.isEmpty()
+                && !hideVolte) {
             return false;
         }
         if (templateId.isEmpty()) return true;
@@ -186,6 +189,7 @@ final class Draft {
         if (packs.size() > 1) j.put("packs", new JSONArray(packs));
         if (!exportSizes.isEmpty()) j.put("exportSizes", new JSONObject(new java.util.TreeMap<>(exportSizes)));
         if (systemIcons) j.put("systemIcons", true);
+        if (hideVolte) j.put("hideVolte", true);
         if (!overlay.isEmpty()) j.put("overlay", overlay).put("overlayAll", overlayAll);
         if (!overlay.isEmpty() && overlayScale != 100) j.put("overlayScale", overlayScale);
         if (!overlay.isEmpty() && !overlayClip) j.put("overlayClip", false);

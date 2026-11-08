@@ -58,6 +58,16 @@ final class ThemeEngine {
             + "<resources><color name=\"magic_gray_4\">#00000000</color></resources>\n";
     private static final String FOLDER_GLASS = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
             + "<HnTheme><transparent>false</transparent><highlight>true</highlight></HnTheme>";
+    private static final String STATUSBAR_MODULE = "com.android.systemui.status";
+    private static final String VOLTE_RESOURCE_DIRECTORY = "res/drawable-xxhdpi/";
+    private static final List<String> VOLTE_ICON_NAMES = List.of(
+            "ic_statusbar_volte",
+            "ic_statusbar_volte_dl",
+            "ic_statusbar_volte_dl_center",
+            "ic_statusbar_volte_sig_dl",
+            "ic_statusbar_incall_double_volte");
+    private static final int VOLTE_ICON_WIDTH = 1;
+    private static final int VOLTE_ICON_HEIGHT = 60;
 
     static Format inspect(Context context, Uri uri) throws Exception {
         File theme = File.createTempFile("sample-", ".hnt", context.getCacheDir());
@@ -522,7 +532,14 @@ final class ThemeEngine {
                        IconRepository.Pack pack,
                        List<IconRepository.App> apps, Map<String, String> overrides,
                        Bitmap cover, Progress progress) throws Exception {
-        return build(context, title, fullPack, shape, clearFolderBackground, pack, apps, overrides, cover, null, progress);
+        return build(context, title, fullPack, shape, clearFolderBackground, pack, apps, overrides, cover, false, progress);
+    }
+
+    static Built build(Context context, String title, boolean fullPack, IconShape shape, boolean clearFolderBackground,
+                       IconRepository.Pack pack, List<IconRepository.App> apps, Map<String, String> overrides,
+                       Bitmap cover, boolean hideVolte, Progress progress) throws Exception {
+        return build(context, title, fullPack, shape, null, clearFolderBackground, pack, apps, overrides,
+                cover, null, null, false, false, null, false, true, null, 100, List.of(), null, hideVolte, progress);
     }
 
     static Built build(Context context, String title, boolean fullPack, IconShape shape, boolean clearFolderBackground,
@@ -594,6 +611,17 @@ final class ThemeEngine {
                        boolean overlayClip, Bitmap background, boolean backgroundAll, boolean backgroundClip,
                        Bitmap shapeMask, int iconScale, List<IconFilters.Filter> filters,
                        Map<String, Integer> exportSizes, Progress progress) throws Exception {
+        return build(context, title, fullPack, shape, corners, clearFolderBackground, pack, apps, overrides,
+                cover, wallpaper, overlay, overlayAll, overlayClip, background, backgroundAll, backgroundClip,
+                shapeMask, iconScale, filters, exportSizes, false, progress);
+    }
+
+    static Built build(Context context, String title, boolean fullPack, IconShape shape, int[] corners,
+                       boolean clearFolderBackground, IconRepository.Pack pack, List<IconRepository.App> apps,
+                       Map<String, String> overrides, Bitmap cover, File wallpaper, Bitmap overlay, boolean overlayAll,
+                       boolean overlayClip, Bitmap background, boolean backgroundAll, boolean backgroundClip,
+                       Bitmap shapeMask, int iconScale, List<IconFilters.Filter> filters,
+                       Map<String, Integer> exportSizes, boolean hideVolte, Progress progress) throws Exception {
         if (iconScale < IconOverlay.MIN_SCALE || iconScale > IconOverlay.MAX_SCALE) {
             throw new IOException(App.text(R.string.icon_scale_invalid));
         }
@@ -615,7 +643,7 @@ final class ThemeEngine {
             }
             return buildSized(context, title, fullPack, shape, corners, clearFolderBackground, pack, apps, overrides,
                     cover, wallpaper, sizedOverlay, overlayAll, overlayClip, sizedBackground, backgroundAll,
-                    backgroundClip, sizedMask, size, iconScale, filters, sizes, progress);
+                    backgroundClip, sizedMask, size, iconScale, filters, sizes, hideVolte, progress);
         } finally {
             if (sizedOverlay != null && sizedOverlay != overlay) sizedOverlay.recycle();
             if (sizedBackground != null && sizedBackground != background) sizedBackground.recycle();
@@ -628,7 +656,7 @@ final class ThemeEngine {
                        Map<String, String> overrides, Bitmap cover, File wallpaper, Bitmap overlay, boolean overlayAll,
                        boolean overlayClip, Bitmap background, boolean backgroundAll, boolean backgroundClip,
                        Bitmap shapeMask, int iconSize, int iconScale, List<IconFilters.Filter> filters,
-                       ExportSizes sizes, Progress progress) throws Exception {
+                       ExportSizes sizes, boolean hideVolte, Progress progress) throws Exception {
         if (shape == IconShape.FILE && shapeMask == null) throw new IOException(App.text(R.string.mask_file_missing));
         if (overlay != null) IconOverlay.validateRendered(overlay);
         if (background != null) IconBackground.validate(background);
@@ -650,7 +678,7 @@ final class ThemeEngine {
             }
             return build(context, title, shape, corners, clearFolderBackground, pack, cover,
                     wallpaper, overlay, border, overlayAll, overlayClip, backdrop, backgroundAll, shapeMask,
-                    targets, count, maskSize, iconSize, iconScale, filters, sizes, progress);
+                    targets, count, maskSize, iconSize, iconScale, filters, sizes, hideVolte, progress);
         } finally {
             if (border != null) border.recycle();
             if (backdrop != null) backdrop.recycle();
@@ -663,7 +691,8 @@ final class ThemeEngine {
                                boolean overlayClip, Bitmap background, boolean backgroundAll,
                                Bitmap shapeMask,
                                Map<String, String> targets, int count, int maskSize, int iconSize, int iconScale,
-                               List<IconFilters.Filter> filters, ExportSizes sizes, Progress progress) throws Exception {
+                               List<IconFilters.Filter> filters, ExportSizes sizes, boolean hideVolte,
+                               Progress progress) throws Exception {
         byte[] wallpaperBytes = wallpaper == null ? null : java.nio.file.Files.readAllBytes(wallpaper.toPath());
         if (wallpaperBytes != null) verifyWallpaper(wallpaperBytes);
         File nested = File.createTempFile("icons-", ".zip", context.getCacheDir());
@@ -718,6 +747,9 @@ final class ThemeEngine {
                 zip.putNextEntry(new ZipEntry("icons"));
                 try (InputStream input = new FileInputStream(nested)) { input.transferTo(zip); }
                 zip.closeEntry();
+                if (hideVolte) {
+                    put(zip, STATUSBAR_MODULE, statusBarModule());
+                }
                 ByteArrayOutputStream jpeg = new ByteArrayOutputStream();
                 if (!cover.compress(Bitmap.CompressFormat.JPEG, 92, jpeg)) throw new IOException(App.text(R.string.cover_encoding_error));
                 put(zip, "preview/cover.jpg", jpeg.toByteArray());
@@ -730,7 +762,7 @@ final class ThemeEngine {
                 } finally { if (small != cover) small.recycle(); }
             }
             verifyArchive(result, targets.size(), shape, corners, clearFolderBackground, maskSize,
-                    wallpaper != null, border, background, shapeMask, iconSize, expectedSizes);
+                    wallpaper != null, border, background, shapeMask, iconSize, expectedSizes, hideVolte);
             complete = true;
             return new Built(result, count);
         } finally {
@@ -823,13 +855,25 @@ final class ThemeEngine {
                          Bitmap background, boolean backgroundAll, boolean backgroundClip, Bitmap shapeMask,
                          int iconScale, List<IconFilters.Filter> filters, Map<String, Integer> exportSizes,
                          Progress progress) throws Exception {
+        return export(context, title, filename, fullPack, shape, corners, clearFolderBackground, pack, apps,
+                overrides, cover, tree, replace, wallpaper, overlay, overlayAll, overlayClip,
+                background, backgroundAll, backgroundClip, shapeMask, iconScale, filters, exportSizes, false, progress);
+    }
+
+    static Result export(Context context, String title, String filename, boolean fullPack, IconShape shape,
+                         int[] corners, boolean clearFolderBackground, IconRepository.Pack pack,
+                         List<IconRepository.App> apps, Map<String, String> overrides, Bitmap cover, Uri tree,
+                         Uri replace, File wallpaper, Bitmap overlay, boolean overlayAll, boolean overlayClip,
+                         Bitmap background, boolean backgroundAll, boolean backgroundClip, Bitmap shapeMask,
+                         int iconScale, List<IconFilters.Filter> filters, Map<String, Integer> exportSizes,
+                         boolean hideVolte, Progress progress) throws Exception {
         validateTree(context, tree);
         ContentResolver resolver = context.getContentResolver();
         Uri existing = findDocument(resolver, tree, filename);
         if (existing != null && !existing.equals(replace)) throw new IOException(context.getString(R.string.file_exists));
         Built built = build(context, title, fullPack, shape, corners, clearFolderBackground, pack, apps, overrides,
                 cover, wallpaper, overlay, overlayAll, overlayClip, background, backgroundAll, backgroundClip,
-                shapeMask, iconScale, filters, exportSizes, progress);
+                shapeMask, iconScale, filters, exportSizes, hideVolte, progress);
         File result = built.file();
         Uri created = null;
         try {
@@ -1140,14 +1184,22 @@ final class ThemeEngine {
     static void verifyArchive(File file, int targetCount, IconShape shape, int[] corners, boolean clearFolderBackground,
                               int maskSize, boolean wallpaper, Bitmap overlay, Bitmap background, Bitmap shapeMask,
                               int iconSize, Map<String, Integer> expectedSizes) throws IOException {
+        verifyArchive(file, targetCount, shape, corners, clearFolderBackground, maskSize, wallpaper, overlay,
+                background, shapeMask, iconSize, expectedSizes, false);
+    }
+
+    static void verifyArchive(File file, int targetCount, IconShape shape, int[] corners, boolean clearFolderBackground,
+                              int maskSize, boolean wallpaper, Bitmap overlay, Bitmap background, Bitmap shapeMask,
+                              int iconSize, Map<String, Integer> expectedSizes, boolean hideVolte) throws IOException {
         if (shape == IconShape.FILE && shapeMask == null) throw new IOException(App.text(R.string.mask_file_missing));
         try (ZipFile zip = new ZipFile(file)) {
-            if (zip.size() != (clearFolderBackground ? 7 : 6) + (wallpaper ? 3 : 0)
+            if (            zip.size() != (clearFolderBackground ? 7 : 6) + (wallpaper ? 3 : 0) + (hideVolte ? 1 : 0)
                     || zip.getEntry("description.xml") == null || zip.getEntry("icons") == null
                     || zip.getEntry("preview/cover.jpg") == null || zip.getEntry("preview/preview_icons_0.jpg") == null
                     || zip.getEntry("preview/icon_small.jpg") == null || zip.getEntry("preview/") == null) {
                 throw new IOException(App.text(R.string.archive_incomplete));
             }
+            verifyStatusBarModule(zip, hideVolte);
             if (wallpaper) {
                 ZipEntry home = zip.getEntry("wallpaper/home_wallpaper_0.jpg");
                 ZipEntry lock = zip.getEntry("wallpaper/unlock_wallpaper_0.jpg");
@@ -1257,6 +1309,62 @@ final class ThemeEngine {
                 if (hasBackground != (background != null)) throw new IOException(App.text(R.string.background_archive_error));
             }
         }
+    }
+
+    private static byte[] statusBarModule() throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (ZipOutputStream zip = new ZipOutputStream(bytes)) {
+            put(zip, "res/", new byte[0]);
+            put(zip, VOLTE_RESOURCE_DIRECTORY, new byte[0]);
+            Bitmap transparent = Bitmap.createBitmap(VOLTE_ICON_WIDTH, VOLTE_ICON_HEIGHT, Bitmap.Config.ARGB_8888);
+            try {
+                transparent.eraseColor(Color.TRANSPARENT);
+                byte[] image = png(transparent);
+                for (String name : VOLTE_ICON_NAMES) {
+                    put(zip, VOLTE_RESOURCE_DIRECTORY + name + ".png", image);
+                }
+            } finally {
+                transparent.recycle();
+            }
+        }
+        return bytes.toByteArray();
+    }
+
+    private static void verifyStatusBarModule(ZipFile archive, boolean expected) throws IOException {
+        ZipEntry module = archive.getEntry(STATUSBAR_MODULE);
+        if (module == null) {
+            if (expected) throw new IOException(App.text(R.string.archive_incomplete));
+            return;
+        }
+        if (!expected) throw new IOException(App.text(R.string.archive_incomplete));
+        Set<String> remaining = new HashSet<>(List.of("res/", VOLTE_RESOURCE_DIRECTORY));
+        for (String name : VOLTE_ICON_NAMES) remaining.add(VOLTE_RESOURCE_DIRECTORY + name + ".png");
+        try (ZipInputStream zip = new ZipInputStream(archive.getInputStream(module))) {
+            for (ZipEntry entry; (entry = zip.getNextEntry()) != null;) {
+                String name = entry.getName();
+                if (!remaining.remove(name)) throw new IOException(App.text(R.string.archive_incomplete));
+                if (name.startsWith(VOLTE_RESOURCE_DIRECTORY) && name.endsWith(".png")) {
+                    byte[] bytes = zip.readAllBytes();
+                    Bitmap icon = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                    if (icon == null) throw new IOException(App.text(R.string.archive_incomplete));
+                    try {
+                        if (icon.getWidth() != VOLTE_ICON_WIDTH || icon.getHeight() != VOLTE_ICON_HEIGHT) {
+                            throw new IOException(App.text(R.string.archive_incomplete));
+                        }
+                        for (int y = 0; y < icon.getHeight(); y++) {
+                            for (int x = 0; x < icon.getWidth(); x++) {
+                                if (Color.alpha(icon.getPixel(x, y)) != 0) {
+                                    throw new IOException(App.text(R.string.archive_incomplete));
+                                }
+                            }
+                        }
+                    } finally {
+                        icon.recycle();
+                    }
+                }
+            }
+        }
+        if (!remaining.isEmpty()) throw new IOException(App.text(R.string.archive_incomplete));
     }
 
     private static void verifyWallpaper(byte[] bytes) throws IOException {
