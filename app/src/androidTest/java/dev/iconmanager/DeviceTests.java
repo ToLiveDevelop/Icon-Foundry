@@ -77,6 +77,188 @@ public final class DeviceTests extends Instrumentation {
         check(visited[0] == 2, "Pack discovery stops parsing appfilter after its first matching entry");
     }
 
+    private void verifyExportExtensions(Context context) throws Exception {
+        File directory = Files.createTempDirectory(context.getCacheDir().toPath(), "extension-check-").toFile();
+        Context isolated = new android.content.ContextWrapper(context) {
+            @Override public File getFilesDir() { return directory; }
+            @Override public android.content.SharedPreferences getSharedPreferences(String name, int mode) {
+                return super.getSharedPreferences("extension-check-" + name, mode);
+            }
+        };
+        var defaults = isolated.getSharedPreferences("settings", 0);
+        defaults.edit().clear().commit();
+        try {
+            Draft legacy = Draft.fromJson(new org.json.JSONObject("{}"));
+            check(legacy.effectiveExportExtension(isolated).equals(".hnt") && !legacy.toJson().has("exportExtension"),
+                    "Legacy templates inherit the initial HNT default without changing their JSON");
+            defaults.edit().putString("exportExtension", ".hwt").commit();
+            check(legacy.effectiveExportExtension(isolated).equals(".hwt"),
+                    "Templates without an override follow the application default");
+            TemplateStore store = new TemplateStore(isolated);
+            for (String extension : List.of(".hnt", ".hwt")) {
+                Draft draft = new Draft();
+                draft.title = "Extension " + extension;
+                draft.packs.add("dev.test.extension");
+                draft.exportExtension = extension;
+                draft.save(isolated);
+                check(Draft.load(isolated).exportExtension.equals(extension), "Extension persists in the editable draft");
+                TemplateStore.Entry saved = store.save(draft, "Extension pack", false);
+                check(store.open(saved.id()).exportExtension.equals(extension), "Extension persists in its template");
+                draft.templateId = saved.id();
+                check(store.save(draft, "Extension pack", false).id().equals(saved.id()),
+                        "Updating a template retains its extension");
+            }
+            byte[] backup = store.backup();
+            Files.delete(new File(directory, "templates.json").toPath());
+            check(store.restoreBackup(backup).imported() == 2, "Portable backup restores both extension choices");
+            for (TemplateStore.Entry entry : store.list()) {
+                Draft restored = store.open(entry.id());
+                defaults.edit().putString("exportExtension", restored.exportExtension.equals(".hnt") ? ".hwt" : ".hnt").commit();
+                check(restored.effectiveExportExtension(isolated).equals(restored.exportExtension),
+                        "Template override takes priority over a different application default after backup restore");
+            }
+            expectFailure(() -> Draft.fromJson(new org.json.JSONObject().put("exportExtension", ".zip")),
+                    "Unsupported extensions are rejected on import");
+            expectFailure(() -> ThemeEngine.filename("Theme", ".zip"), "Unsupported output extension is rejected");
+            java.time.LocalDateTime date = java.time.LocalDateTime.of(2026, 11, 10, 22, 30, 0);
+            for (String extension : List.of(".hnt", ".hwt")) {
+                check(ThemeEngine.filename("Тема.HWT", extension).equals("Тема" + extension)
+                                && ThemeEngine.filename("Тема.HNT", extension).equals("Тема" + extension),
+                        "Either supplied suffix is replaced rather than doubled");
+                check(ThemeEngine.datedFilename("Тема", date, 2, extension)
+                                .equals("Тема_2026-11-10_22-30-00_2" + extension),
+                        "Dated duplicate filenames retain the selected extension");
+                check(ThemeEngine.datedFilename("a".repeat(150), date, 1, extension).length() == 100,
+                        "Both extensions preserve the filename length limit");
+            }
+        } finally {
+            defaults.edit().clear().commit();
+            isolated.getSharedPreferences("draft", 0).edit().clear().commit();
+            Files.deleteIfExists(new File(directory, "templates.json").toPath());
+            Files.deleteIfExists(directory.toPath());
+        }
+
+        Draft savedDraft = Draft.load(context);
+        check(!savedDraft.tree.isEmpty(), "Extension export check uses the existing user-granted export directory");
+        Uri tree = Uri.parse(savedDraft.tree);
+        IconRepository repository = new IconRepository(context);
+        IconRepository.Pack pack = repository.load(repository.packs().stream().findFirst().orElseThrow().packageName());
+        IconRepository.App app = new IconRepository.App(new ComponentName("dev.test.extension", "dev.test.extension.Main"), "Extension");
+        Map<String, String> overrides = Map.of(app.key(), pack.icons.keySet().iterator().next());
+        Bitmap cover = ThemeEngine.cover(pack, List.of(app), overrides);
+        List<Uri> created = new ArrayList<>();
+        String title = "_IconFoundry_extension_" + java.util.UUID.randomUUID();
+        java.time.LocalDateTime date = java.time.LocalDateTime.now();
+        try {
+            for (String extension : List.of(".hwt", ".hnt")) {
+                String name = ThemeEngine.availableDatedFilename(context.getContentResolver(), tree, title, date, extension);
+                ThemeEngine.Result result = ThemeEngine.export(context, title, name, false, IconShape.NONE, false,
+                        pack, List.of(app), overrides, cover, tree, null, (done, total) -> {});
+                created.add(result.uri());
+                check(ThemeEngine.documentName(context.getContentResolver(), result.uri()).equals(name)
+                                && result.filename().endsWith(extension),
+                        "SAF writes the requested extension without renaming it");
+                try (var input = context.getContentResolver().openInputStream(result.uri());
+                     ZipInputStream zip = new ZipInputStream(input)) {
+                    java.util.Set<String> entries = new java.util.HashSet<>();
+                    for (ZipEntry entry; (entry = zip.getNextEntry()) != null;) entries.add(entry.getName());
+                    check(entries.containsAll(List.of("description.xml", "icons", "preview/cover.jpg")),
+                            "Both extensions contain the existing theme archive format");
+                }
+                check(ThemeEngine.availableThemeTitle(context.getContentResolver(), tree, title).equals(title + " v2"),
+                        "Automatic theme versioning recognizes both HWT and HNT archives");
+                check(ThemeEngine.availableDatedFilename(context.getContentResolver(), tree, title, date, extension)
+                                .equals(ThemeEngine.datedFilename(title, date, 2, extension)),
+                        "Filename collision detection uses the chosen extension");
+            }
+        } finally {
+            cover.recycle();
+            for (Uri uri : created) android.provider.DocumentsContract.deleteDocument(context.getContentResolver(), uri);
+        }
+        verifyExportExtensionUi(context);
+    }
+
+    private void verifyExportExtensionUi(Context context) throws Exception {
+        var preferences = context.getSharedPreferences("settings", 0);
+        boolean hadExtension = preferences.contains("exportExtension");
+        String originalExtension = Draft.defaultExportExtension(context);
+        MainActivity activity = (MainActivity) startActivitySync(new android.content.Intent(context, MainActivity.class)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK));
+        Draft original = (Draft) field(activity, "draft");
+        try {
+            runOnMainChecked(() -> {
+                setField(activity, "draft", new Draft());
+                activity.openEditor();
+            });
+            waitForWork(activity);
+            runOnMainChecked(() -> {
+                Draft draft = (Draft) field(activity, "draft");
+                var choices = (android.widget.RadioGroup) field(activity, "exportExtensionChoices");
+                check(((android.widget.RadioButton) choices.getChildAt(
+                        draft.effectiveExportExtension(activity).equals(".hwt") ? 1 : 0)).isChecked()
+                                && draft.exportExtension.isEmpty(),
+                        "Export screen displays the default without pinning a template override");
+                choices.getChildAt(1).performClick();
+                check(draft.exportExtension.equals(".hwt"), "Export HWT radio stores the template choice");
+                choices.getChildAt(0).performClick();
+                check(draft.exportExtension.equals(".hnt"), "Export HNT radio can explicitly override an HWT default");
+                try {
+                    var method = MainActivity.class.getDeclaredMethod("showSettings");
+                    method.setAccessible(true);
+                    method.invoke(activity);
+                } catch (ReflectiveOperationException error) { throw new AssertionError(error); }
+                var dialog = (android.app.Dialog) field(activity, "settingsDialog");
+                var defaults = (android.widget.RadioGroup) dialog.getWindow().getDecorView()
+                        .findViewWithTag("default-export-extension");
+                check(defaults != null && defaults.getChildCount() == 2, "Settings offer both extension defaults");
+                String before = Draft.defaultExportExtension(activity);
+                defaults.getChildAt(before.equals(".hnt") ? 1 : 0).performClick();
+                dialog.dismiss();
+                check(Draft.defaultExportExtension(activity).equals(before),
+                        "Closing settings without Apply leaves the application default unchanged");
+                String locales = activity.getSystemService(android.app.LocaleManager.class)
+                        .getApplicationLocales().toLanguageTags();
+                if (locales.equals("ru") || locales.equals("en")) {
+                    draft.exportExtension = "";
+                    for (String extension : List.of(".hwt", ".hnt")) {
+                        try {
+                            var method = MainActivity.class.getDeclaredMethod("showSettings");
+                            method.setAccessible(true);
+                            method.invoke(activity);
+                        } catch (ReflectiveOperationException error) { throw new AssertionError(error); }
+                        var settings = (android.app.Dialog) field(activity, "settingsDialog");
+                        var group = (android.widget.RadioGroup) settings.getWindow().getDecorView()
+                                .findViewWithTag("default-export-extension");
+                        group.getChildAt(extension.equals(".hwt") ? 1 : 0).performClick();
+                        findText(settings.getWindow().getDecorView(), activity.getString(R.string.apply_settings))
+                                .performClick();
+                        check(Draft.defaultExportExtension(activity).equals(extension)
+                                        && draft.exportExtension.isEmpty()
+                                        && ((android.widget.RadioButton) choices.getChildAt(
+                                                extension.equals(".hwt") ? 1 : 0)).isChecked(),
+                                "Apply persists the default and refreshes the export UI without pinning an override");
+                        if (extension.equals(".hwt")) {
+                            choices.getChildAt(0).performClick();
+                            check(draft.effectiveExportExtension(activity).equals(".hnt"),
+                                    "An explicit HNT selection overrides the applied HWT default");
+                            draft.exportExtension = "";
+                        }
+                    }
+                }
+            });
+        } finally {
+            runOnMainChecked(() -> {
+                setField(activity, "draft", original);
+                activity.finish();
+            });
+            waitForIdleSync();
+            var edit = preferences.edit();
+            if (hadExtension) edit.putString("exportExtension", originalExtension);
+            else edit.remove("exportExtension");
+            check(edit.commit(), "Original extension default restored after UI checks");
+        }
+    }
+
     private void verifyVoLTE(Context context) throws Exception {
         IconRepository repository = new IconRepository(context);
         String packageName = arguments.getString("pack");
@@ -135,7 +317,12 @@ public final class DeviceTests extends Instrumentation {
                             "res/drawable-xxhdpi/ic_statusbar_volte_dl.png",
                             "res/drawable-xxhdpi/ic_statusbar_volte_dl_center.png",
                             "res/drawable-xxhdpi/ic_statusbar_volte_sig_dl.png",
-                            "res/drawable-xxhdpi/ic_statusbar_incall_double_volte.png"));
+                            "res/drawable-xxhdpi/ic_statusbar_incall_double_volte.png",
+                            "res/drawable-xxhdpi/ic_statusbar_superscript_double_icon1.png",
+                            "res/drawable-xxhdpi/ic_statusbar_superscript_double_icon2.png",
+                            "res/drawable-xxhdpi/ic_statusbar_superscript_icon1.png",
+                            "res/drawable-xxhdpi/ic_statusbar_superscript_icon2.png",
+                            "res/drawable-xxhdpi/ic_statusbar_superscript_icon_double.png"));
             try (ZipInputStream status = new ZipInputStream(archive.getInputStream(module))) {
                 for (ZipEntry entry; (entry = status.getNextEntry()) != null;) {
                     check(remaining.remove(entry.getName()), "Status-bar module contains only the VoLTE resource path");
@@ -164,6 +351,11 @@ public final class DeviceTests extends Instrumentation {
 
     private void runChecks() throws Exception {
         Context context = getTargetContext();
+        if ("true".equals(arguments.getString("extensionOnly"))) {
+            verifyExportExtensions(context);
+            verifyVoLTE(context);
+            return;
+        }
         if ("true".equals(arguments.getString("volteOnly"))) {
             verifyVoLTE(context);
             return;

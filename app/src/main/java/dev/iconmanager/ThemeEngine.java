@@ -65,7 +65,12 @@ final class ThemeEngine {
             "ic_statusbar_volte_dl",
             "ic_statusbar_volte_dl_center",
             "ic_statusbar_volte_sig_dl",
-            "ic_statusbar_incall_double_volte");
+            "ic_statusbar_incall_double_volte",
+            "ic_statusbar_superscript_double_icon1",
+            "ic_statusbar_superscript_double_icon2",
+            "ic_statusbar_superscript_icon1",
+            "ic_statusbar_superscript_icon2",
+            "ic_statusbar_superscript_icon_double");
     private static final int VOLTE_ICON_WIDTH = 1;
     private static final int VOLTE_ICON_HEIGHT = 60;
 
@@ -173,14 +178,27 @@ final class ThemeEngine {
     }
 
     static String filename(String raw) {
+        return filename(raw, ".hnt");
+    }
+
+    static boolean validExtension(String extension) {
+        return ".hnt".equals(extension) || ".hwt".equals(extension);
+    }
+
+    private static boolean themeFilename(String name) {
+        String lower = name.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".hnt") || lower.endsWith(".hwt");
+    }
+
+    static String filename(String raw, String extension) {
+        if (!validExtension(extension)) throw new IllegalArgumentException(App.text(R.string.export_extension_invalid));
         String value = raw.trim();
         if (value.isEmpty() || value.length() > 100 || value.matches(".*[\\\\/:*?\"<>|\\p{Cntrl}].*")
                 || value.startsWith(".") || value.endsWith(".") || value.endsWith(" ")) {
             throw new IllegalArgumentException("filename");
         }
-        if (value.toLowerCase(Locale.ROOT).endsWith(".hnt")) value = value.substring(0, value.length() - 4) + ".hnt";
-        else value += ".hnt";
-        if (value.equalsIgnoreCase(".hnt")) throw new IllegalArgumentException("filename");
+        if (themeFilename(value)) value = value.substring(0, value.length() - 4);
+        value += extension;
         return value;
     }
 
@@ -189,18 +207,23 @@ final class ThemeEngine {
     }
 
     static String datedFilename(String title, LocalDateTime createdAt, int copy) {
+        return datedFilename(title, createdAt, copy, ".hnt");
+    }
+
+    static String datedFilename(String title, LocalDateTime createdAt, int copy, String extension) {
+        if (!validExtension(extension)) throw new IllegalArgumentException(App.text(R.string.export_extension_invalid));
         if (copy < 1) throw new IllegalArgumentException("copy");
         String base = title.strip().replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_").replaceAll("\\s+", " ");
         if (base.isBlank()) throw new IllegalArgumentException(App.text(R.string.title_required));
         base = base.replaceAll("^\\.+|[. ]+$", "_");
         String suffix = "_" + createdAt.format(DateTimeFormatter.ofPattern("uuuu-MM-dd_HH-mm-ss", Locale.ROOT))
-                + (copy > 1 ? "_" + copy : "") + ".hnt";
+                + (copy > 1 ? "_" + copy : "") + extension;
         int limit = 100 - suffix.length();
         if (base.length() > limit) {
             int end = Character.isHighSurrogate(base.charAt(limit - 1)) ? limit - 1 : limit;
             base = base.substring(0, end);
         }
-        return filename(base + suffix);
+        return filename(base + suffix, extension);
     }
 
     static void validateTree(Context context, Uri tree) throws IOException {
@@ -224,8 +247,13 @@ final class ThemeEngine {
 
     static String availableDatedFilename(ContentResolver resolver, Uri tree, String title, LocalDateTime createdAt)
             throws IOException {
+        return availableDatedFilename(resolver, tree, title, createdAt, ".hnt");
+    }
+
+    static String availableDatedFilename(ContentResolver resolver, Uri tree, String title, LocalDateTime createdAt,
+                                         String extension) throws IOException {
         for (int copy = 1; copy <= 99; copy++) {
-            String name = datedFilename(title, createdAt, copy);
+            String name = datedFilename(title, createdAt, copy, extension);
             if (!exists(resolver, tree, name)) return name;
         }
         throw new IOException(App.text(R.string.filename_unavailable));
@@ -268,7 +296,7 @@ final class ThemeEngine {
             if (cursor == null) throw new IOException(App.text(R.string.folder_read_error));
             while (cursor.moveToNext()) {
                 String name = cursor.getString(0);
-                if (name == null || !name.toLowerCase(Locale.ROOT).endsWith(".hnt")) continue;
+                if (name == null || !themeFilename(name)) continue;
                 Uri document = DocumentsContract.buildDocumentUriUsingTree(tree, cursor.getString(1));
                 try {
                     String[] metadata = readThemeIdentity(resolver, document);

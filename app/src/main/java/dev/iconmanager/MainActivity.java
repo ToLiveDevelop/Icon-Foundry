@@ -97,7 +97,7 @@ public final class MainActivity extends Activity {
     private AlertDialog filterTypeDialog;
     private Dialog settingsDialog, overlayDialog, shapeDialog, backgroundDialog;
     private java.util.function.Consumer<MaskSelection> pendingShapeMaskImport;
-    private RadioGroup exportScope;
+    private RadioGroup exportScope, exportExtensionChoices;
     private ImageView stylePreview;
     private TextView iconSizeInfo;
     private Button shapeButton;
@@ -159,6 +159,21 @@ public final class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         if (repository != null) repository.invalidatePacks();
+    }
+
+    private RadioGroup extensionChoices(String selected, String tag, java.util.function.Consumer<String> choose) {
+        RadioGroup group = new RadioGroup(this);
+        group.setTag(tag);
+        group.setOrientation(RadioGroup.HORIZONTAL);
+        for (String extension : List.of(".hnt", ".hwt")) {
+            RadioButton option = new RadioButton(this);
+            option.setId(View.generateViewId());
+            option.setText(extension);
+            group.addView(option, new RadioGroup.LayoutParams(0, -2, 1));
+            option.setChecked(extension.equals(selected));
+            option.setOnClickListener(view -> choose.accept(extension));
+        }
+        return group;
     }
 
     private void showSettings() {
@@ -247,6 +262,11 @@ public final class MainActivity extends Activity {
             languageChoices.add(option);
         }
         selectSetting(languageChoices, chosenLanguage[0]);
+        LinearLayout extensionCard = card(content, R.string.export_extension_default);
+        extensionCard.addView(text(getString(R.string.export_extension_default_help), 14, MUTED));
+        String[] chosenExtension = {Draft.defaultExportExtension(this)};
+        extensionCard.addView(extensionChoices(chosenExtension[0], "default-export-extension",
+                value -> chosenExtension[0] = value));
         LinearLayout backup = card(content, R.string.template_backup);
         TextView backupHelp = text(getString(R.string.template_backup_help), 14, MUTED);
         backupHelp.setLineSpacing(0, 1.2f);
@@ -255,7 +275,7 @@ public final class MainActivity extends Activity {
         backup.addView(button(R.string.restore_templates, view -> openFile(TEMPLATE_BACKUP_IMPORT, "application/json")));
         Button apply = button(R.string.apply_settings, view -> {
             if (!getSharedPreferences("settings", 0).edit().putString("theme", chosenTheme[0])
-                    .putString("language", chosenLanguage[0]).commit()) {
+                    .putString("language", chosenLanguage[0]).putString("exportExtension", chosenExtension[0]).commit()) {
                 showError(new IOException(getString(R.string.settings_save_error))); return;
             }
             saveDraft();
@@ -264,6 +284,10 @@ public final class MainActivity extends Activity {
                 getSystemService(android.app.LocaleManager.class)
                         .setApplicationLocales(android.os.LocaleList.forLanguageTags(chosenLanguage[0]));
             } else if (!selected.equals(chosenTheme[0])) recreate();
+            else if (exportExtensionChoices != null) {
+                exportExtensionChoices.check(exportExtensionChoices.getChildAt(
+                        draft.effectiveExportExtension(this).equals(".hwt") ? 1 : 0).getId());
+            }
         });
         apply.setTextColor(Color.BLACK);
         apply.setBackground(buttonSurface(ACCENT, 28));
@@ -785,6 +809,13 @@ public final class MainActivity extends Activity {
             draft.fullPack = id == entirePack.getId(); saveDraft(); refresh();
         });
         scopeCard.addView(exportScope);
+        LinearLayout extensionCard = card(exportBody, R.string.export_extension);
+        extensionCard.addView(text(getString(R.string.export_extension_help), 14, MUTED));
+        exportExtensionChoices = extensionChoices(draft.effectiveExportExtension(this), "export-extension", value -> {
+            draft.exportExtension = value;
+            saveDraft();
+        });
+        extensionCard.addView(exportExtensionChoices);
         LinearLayout destination = card(exportBody, R.string.destination, R.string.destination_help);
         destinationButton = button(R.string.choose_destination, view -> {
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
@@ -3200,6 +3231,7 @@ public final class MainActivity extends Activity {
         Draft snapshot;
         try { snapshot = Draft.fromJson(draft.toJson()); }
         catch (org.json.JSONException error) { showError(error); return; }
+        String extension = snapshot.effectiveExportExtension(this);
         boolean asNew = saveAsNew.isChecked();
         boolean fullPack = draft.fullPack;
         IconShape shape = draft.shape;
@@ -3209,7 +3241,8 @@ public final class MainActivity extends Activity {
         String coverPath = draft.coverPath;
         work(getString(R.string.saving_theme), () -> {
             String outputTitle = ThemeEngine.availableThemeTitle(getContentResolver(), tree, themeTitle);
-            String outputName = ThemeEngine.availableDatedFilename(getContentResolver(), tree, outputTitle, createdAt);
+            String outputName = ThemeEngine.availableDatedFilename(getContentResolver(), tree, outputTitle, createdAt,
+                    extension);
             apps = repository.apps();
             Bitmap cover = null;
             Bitmap overlay = null, background = null, backdrop = null, shapeMask = null;

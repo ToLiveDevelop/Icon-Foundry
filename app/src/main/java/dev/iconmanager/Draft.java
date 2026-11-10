@@ -18,6 +18,7 @@ final class Draft {
     String coverPath = "";
     String wallpaperPath = "";
     String templateId = "";
+    String exportExtension = "";
     boolean fullPack;
     boolean clearFolderBackground = true;
     boolean systemIcons;
@@ -64,6 +65,12 @@ final class Draft {
         d.coverPath = j.optString("coverPath");
         d.wallpaperPath = j.optString("wallpaperPath");
         d.templateId = j.optString("templateId");
+        if (j.has("exportExtension")) {
+            d.exportExtension = j.getString("exportExtension");
+            if (!ThemeEngine.validExtension(d.exportExtension)) {
+                throw new JSONException(App.text(R.string.export_extension_invalid));
+            }
+        }
         d.fullPack = j.optBoolean("fullPack");
         d.clearFolderBackground = j.optBoolean("clearFolderBackground", true);
         d.systemIcons = j.optBoolean("systemIcons");
@@ -138,6 +145,14 @@ final class Draft {
         context.getSharedPreferences("draft", 0).edit().putString("json", toJson().toString()).apply();
     }
 
+    String effectiveExportExtension(Context context) {
+        return exportExtension.isEmpty() ? defaultExportExtension(context) : exportExtension;
+    }
+
+    static String defaultExportExtension(Context context) {
+        return context.getSharedPreferences("settings", 0).getString("exportExtension", ".hnt");
+    }
+
     void markSaved(Context context) throws Exception {
         context.getSharedPreferences("draft", 0).edit().putString("savedFingerprint", fingerprint(context)).apply();
     }
@@ -145,7 +160,7 @@ final class Draft {
     boolean hasUnsavedChanges(Context context) {
         if (packs.isEmpty() && title.isEmpty() && overrides.isEmpty() && coverPath.isEmpty()
                 && wallpaperPath.isEmpty() && overlay.isEmpty() && background.isEmpty() && shapeFile.isEmpty()
-                && !hideVolte) {
+                && !hideVolte && exportExtension.isEmpty()) {
             return false;
         }
         if (templateId.isEmpty()) return true;
@@ -190,6 +205,12 @@ final class Draft {
         if (!exportSizes.isEmpty()) j.put("exportSizes", new JSONObject(new java.util.TreeMap<>(exportSizes)));
         if (systemIcons) j.put("systemIcons", true);
         if (hideVolte) j.put("hideVolte", true);
+        if (!exportExtension.isEmpty()) {
+            if (!ThemeEngine.validExtension(exportExtension)) {
+                throw new JSONException(App.text(R.string.export_extension_invalid));
+            }
+            j.put("exportExtension", exportExtension);
+        }
         if (!overlay.isEmpty()) j.put("overlay", overlay).put("overlayAll", overlayAll);
         if (!overlay.isEmpty() && overlayScale != 100) j.put("overlayScale", overlayScale);
         if (!overlay.isEmpty() && !overlayClip) j.put("overlayClip", false);
